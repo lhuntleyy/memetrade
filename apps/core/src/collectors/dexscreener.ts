@@ -14,6 +14,7 @@ export interface DexPair {
   fdv?: number;
   volume?: { m5?: number; h1?: number; h24?: number };
   txns?: { m5?: { buys: number; sells: number }; h1?: { buys: number; sells: number } };
+  priceChange?: { m5?: number; h1?: number; h6?: number; h24?: number };
   pairCreatedAt?: number;
   baseToken: { address: string; name?: string; symbol?: string };
   quoteToken?: { address: string; symbol?: string };

@@ -202,3 +202,52 @@ select {
     padding: 12px;
   }
 }
+button.link {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+tr.group td {
+  background: rgb(106 168 255 / 0.06);
+}
+input {
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  max-width: 100%;
+}
+.toolbar button[type="submit"] {
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+svg.spark {
+  width: 100%;
+  height: 80px;
+  background: var(--card);
+  border-radius: 10px;
+}
+svg.spark polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+pre.features {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  overflow-x: auto;
+  font-size: 12px;
+  max-height: 320px;
+}

@@ -13,8 +13,11 @@
         <button type="button" data-tab="overview" class="active">Overview</button>
         <button type="button" data-tab="feed">Live Feed</button>
         <button type="button" data-tab="lab">Trigger Lab</button>
+        <button type="button" data-tab="pipeline">Pipeline</button>
+        <button type="button" data-tab="token">Token</button>
       </nav>
       <span id="ws-dot" title="stream real-time">○</span>
+      <form method="post" action="/logout"><button type="submit" class="link">Keluar</button></form>
     </header>
 
     <main>
@@ -72,6 +75,48 @@
         <div id="lab-dist" class="scroll"></div>
         <h2>Heatmap hit ≥+50% per jam (WIB)</h2>
         <div id="lab-heatmap" class="scroll"></div>
+      </section>
+      <section id="tab-pipeline" class="tab">
+        <div class="toolbar">
+          Rentang:
+          <select id="pipe-hours">
+            <option value="6">6 jam</option>
+            <option value="24" selected>24 jam</option>
+            <option value="72">3 hari</option>
+            <option value="168">7 hari</option>
+          </select>
+          <span class="muted">Fase 2: belum ada entry — token yang lolos semua tahap dicatat sebagai sinyal.</span>
+        </div>
+        <h2>Funnel per profile</h2>
+        <div class="scroll">
+          <table id="pipe-funnel">
+            <thead><tr><th>Profile</th><th>Dievaluasi</th><th>Lolos security</th><th>Lolos filter</th><th>Sinyal</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h2>Alasan ditolak teratas</h2>
+        <div class="scroll">
+          <table id="pipe-reasons">
+            <thead><tr><th>Profile</th><th>Tahap</th><th>Alasan</th><th>Jumlah</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h2>Efektivitas filter (shadow)</h2>
+        <p class="muted">Token yang ditolak tetap dipantau. Rule bagus: rug rate tinggi, hit +50% rendah dibanding "(lolos filter)". Rule yang sering membuang winner = kandidat dilonggarkan.</p>
+        <div class="scroll">
+          <table id="pipe-eff">
+            <thead><tr><th>Profile</th><th>Rule / kelompok</th><th>n</th><th>≥+50%</th><th>≥+100%</th><th>Rug</th><th>Med max</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-token" class="tab">
+        <form id="token-form" class="toolbar">
+          <input id="token-mint" placeholder="Alamat mint token" size="48" autocomplete="off" />
+          <button type="submit">Cari</button>
+        </form>
+        <div id="token-body"><p class="muted">Masukkan mint, atau klik token di Live Feed.</p></div>
       </section>
     </main>
     <script type="module" src="./app.ts"></script>

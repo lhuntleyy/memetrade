@@ -2,10 +2,14 @@
 # Ubah file ini -> core reload otomatis kalau valid; versi tersimpan di config_versions.
 version: 1
 
+# Sumber fitur saat ini (Fase 2): DexScreener (likuiditas, mcap, volume, txns, umur, price change)
+# + Jupiter Tokens v2 (holders, organic_score, dev_pct, traders_5m). Authority/extension dicek di tahap security.
+# Field yang butuh GMGN (top10_pct, bundler_pct, sniper_pct, dev_rug_ratio) di-set on_null: ignore
+# sampai collector GMGN aktif — kembalikan ke reject begitu datanya ada.
 defaults:
   on_null: reject            # "missing data is never good news"
-  critical_fields: [liquidity_usd, top10_pct, dev_pct, mint_authority, freeze_authority]
-  cross_check:
+  critical_fields: [liquidity_usd, mcap_usd]
+  cross_check:               # belum dievaluasi engine (butuh 2 provider untuk field yang sama)
     top10_pct: { providers: [gmgn, solanatracker], max_abs_diff: 8 }
 
 profiles:
@@ -19,13 +23,13 @@ profiles:
       - { field: liquidity_usd,     op: gte,     value: 15000 }
       - { field: mcap_usd,          op: between, value: [40000, 600000] }
       - { field: holders,           op: gte,     value: 150 }
-      - { field: top10_pct,         op: lte,     value: 30 }
+      - { field: top10_pct,         op: lte,     value: 30,  on_null: ignore }   # GMGN
       - { field: dev_pct,           op: lte,     value: 5 }
-      - { field: bundler_pct,       op: lte,     value: 20 }
-      - { field: sniper_pct,        op: lte,     value: 15 }
-      - { field: dev_rug_ratio,     op: lte,     value: 0.5, on_null: ignore }
-      - { field: unique_buyers_1m,  op: gte,     value: 15 }
-      - { field: buy_sell_ratio_1m, op: gte,     value: 1.2 }
+      - { field: bundler_pct,       op: lte,     value: 20,  on_null: ignore }   # GMGN
+      - { field: sniper_pct,        op: lte,     value: 15,  on_null: ignore }   # GMGN
+      - { field: dev_rug_ratio,     op: lte,     value: 0.5, on_null: ignore }   # GMGN
+      - { field: traders_5m,        op: gte,     value: 30 }
+      - { field: buy_sell_ratio_5m, op: gte,     value: 1.2 }
       - { field: price_change_5m,   op: between, value: [-20, 150] }
     mtf:
       trend:   { tf: 5m,  all: ["close > vwap_since_migration", "drawdown_from_ath_pct < 40"] }
@@ -44,7 +48,7 @@ profiles:
       - { field: liquidity_usd, op: gte,     value: 30000 }
       - { field: mcap_usd,      op: between, value: [100000, 5000000] }
       - { field: organic_score, op: gte,     value: 40 }
-      - { field: top10_pct,     op: lte,     value: 25 }
+      - { field: top10_pct,     op: lte,     value: 25, on_null: ignore }   # GMGN
       - { field: holders,       op: gte,     value: 500 }
       - { field: vol_1h_usd,    op: gte,     value: 50000 }
     mtf:

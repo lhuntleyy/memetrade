@@ -1,7 +1,7 @@
 import type { Db } from "@memebot/db";
 import type { EventBus, EventOf, Logger, SourcesConfig } from "@memebot/shared";
 import { toNum } from "@memebot/shared";
-import { type DexScreenerClient, pickMainPair } from "../collectors/dexscreener.ts";
+import { type DexPair, type DexScreenerClient, pickMainPair } from "../collectors/dexscreener.ts";
 import { BatchWriter } from "../journal/batch.ts";
 import { type PathRow, PathStats } from "./path-stats.ts";
 
@@ -23,6 +23,8 @@ interface TickRow {
 export class MarketTracker {
   /** key `${mint}|${sourceKey}` → path aktif */
   private paths = new Map<string, PathStats>();
+  /** pair DexScreener terbaru per mint (dipakai enrichment, tanpa request tambahan) */
+  private latest = new Map<string, { pair: DexPair; at: number }>();
   private byMint = new Map<string, Set<string>>();
   private ticks: BatchWriter<TickRow>;
   private pathUpserts: BatchWriter<PathRow>;
@@ -71,6 +73,12 @@ export class MarketTracker {
     void this.pollLoop();
   }
 
+  /** Pair terbaru untuk mint yang sedang di-track (null kalau belum ter-index / umur > maxAgeMs). */
+  latestPair(mint: string, maxAgeMs = 30_000): DexPair | null {
+    const l = this.latest.get(mint);
+    return l && Date.now() - l.at <= maxAgeMs ? l.pair : null;
+  }
+
   get activeTokens() {
     return this.byMint.size;
   }
@@ -113,7 +121,10 @@ export class MarketTracker {
         this.paths.delete(key);
         const set = this.byMint.get(p.mint);
         set?.delete(key);
-        if (set && set.size === 0) this.byMint.delete(p.mint);
+        if (set && set.size === 0) {
+          this.byMint.delete(p.mint);
+          this.latest.delete(p.mint);
+        }
         this.stats.completed++;
       } else if (p.ticks > 0) {
         this.pathUpserts.push(p.toRow());
@@ -135,6 +146,7 @@ export class MarketTracker {
             const pair = pickMainPair(pairs, mint);
             const priceSol = toNum(pair?.priceNative);
             if (!pair || priceSol === null) continue;
+            this.latest.set(mint, { pair, at: now });
             const tick = {
               t: "PriceTick" as const,
               mint,
@@ -159,7 +171,10 @@ export class MarketTracker {
             });
           }
         } catch (err) {
-          this.log.warn({ err: String(err), n: chunk.length }, "poll harga gagal");
+          const msg = String(err);
+          this.log.warn({ err: msg, n: chunk.length }, "poll harga gagal");
+          // kena rate limit → jeda 15 dtk sebelum lanjut (jangan memperburuk)
+          if (msg.includes("HTTP 429")) await Bun.sleep(15_000);
         }
       }
       this.stats.pollCycles++;

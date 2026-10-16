@@ -9,12 +9,15 @@ import {
   loadConfig,
   watchConfig,
 } from "@memebot/shared";
+import { SolanaRpc } from "@memebot/solana";
 import { DexScreenerClient, startDexScreenerFeeds } from "./collectors/dexscreener.ts";
 import { startPumpPortal } from "./collectors/pumpportal.ts";
 import { startControlServer } from "./control.ts";
+import { JupiterTokens } from "./enrich/jupiter.ts";
 import { startRecorder } from "./journal/recorder.ts";
 import { KillSwitch } from "./kill-switch.ts";
 import { MarketTracker } from "./market/tracker.ts";
+import { Pipeline } from "./strategy/pipeline.ts";
 
 const log = createLogger("core");
 const db = createDb(process.env.DATABASE_URL, { max: 8 });
@@ -55,6 +58,20 @@ const dex = new DexScreenerClient(src.dexscreener.base_url, src.dexscreener.rpm,
 const tracker = new MarketTracker(src.tracker, dex, bus, db, log);
 const pump = src.pumpportal.enabled ? startPumpPortal(src.pumpportal, bus, log) : null;
 const dexFeeds = src.dexscreener.enabled ? startDexScreenerFeeds(src.dexscreener, dex, bus, log) : null;
+// ---- Fase 2: enrichment + security + filter (decision log, tanpa entry) ----
+const rpc = new SolanaRpc();
+if (!process.env.SOLANA_RPC_URL)
+  log.warn("SOLANA_RPC_URL belum di-set — pakai RPC publik (rate limit ketat)");
+const pipeline = new Pipeline({
+  bus,
+  db,
+  log,
+  tracker,
+  jupiter: new JupiterTokens(recorder.recordUsage),
+  rpc,
+  strategy: () => configs.strategy.data,
+  strategyVersion: () => configVersion.strategy,
+});
 if (src.gmgn.enabled) log.warn("collector GMGN belum diimplementasi (butuh API key) — dilewati");
 if (src.meteora.enabled) log.warn("collector Meteora belum diimplementasi — dilewati");
 
@@ -91,6 +108,7 @@ const control = startControlServer({
     },
     tracker: { activeTokens: tracker.activeTokens, activePaths: tracker.activePaths, ...tracker.stats },
     triggers: triggerCounts,
+    pipeline: pipeline.stats,
     journal: recorder.stats(),
   }),
   onControl: async (action, actor) => {
@@ -140,6 +158,7 @@ async function shutdown(signal: string) {
   control.stop();
   pump?.stop();
   dexFeeds?.stop();
+  await pipeline.stop();
   await tracker.stop();
   await recorder.stop();
   try {

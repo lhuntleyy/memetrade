@@ -73,3 +73,73 @@ export function counts(db: Db) {
       (SELECT count(*) FROM tracked_paths WHERE completed_at IS NOT NULL)::int AS paths_done,
       (SELECT count(*) FROM ticks WHERE ts > now() - interval '1 hour')::int AS ticks_1h`;
 }
+
+// ---------------- Fase 2: pipeline & token explorer ----------------
+
+/** Funnel per profile: tiap (mint, trigger) yang dievaluasi → lolos security → lolos filter → sinyal. */
+export function pipelineFunnel(db: Db, hours: number) {
+  return db`
+    WITH per AS (
+      SELECT profile, mint, trigger_ts,
+             bool_and(passed) FILTER (WHERE stage = 'security') AS sec_ok,
+             bool_and(passed) FILTER (WHERE stage = 'filter')   AS filter_ok
+      FROM decisions
+      WHERE ts > now() - make_interval(hours => ${hours})
+      GROUP BY 1, 2, 3
+    )
+    SELECT profile,
+           count(*)::int AS evaluated,
+           count(*) FILTER (WHERE sec_ok)::int AS security_pass,
+           count(*) FILTER (WHERE filter_ok)::int AS filter_pass,
+           count(*) FILTER (WHERE sec_ok AND filter_ok)::int AS signals
+    FROM per GROUP BY profile ORDER BY profile`;
+}
+
+export function rejectReasons(db: Db, hours: number) {
+  return db`
+    SELECT profile, stage, reason, count(*)::int AS n
+    FROM decisions, unnest(failed_rules) AS reason
+    WHERE ts > now() - make_interval(hours => ${hours}) AND NOT passed
+    GROUP BY 1, 2, 3 ORDER BY n DESC LIMIT 40`;
+}
+
+/**
+ * Efektivitas filter (shadow): untuk tiap rule, token yang ditolak rule itu — berapa % yang ternyata
+ * pump ≥+50% (winner terbuang) vs rug (selamat). Dibandingkan dengan token yang lolos filter.
+ */
+export function filterEffectiveness(db: Db, hours: number) {
+  return db`
+    WITH f AS (
+      SELECT d.profile, d.passed, d.failed_rules, p.max_ret, p.rugged
+      FROM decisions d
+      JOIN tracked_paths p ON p.mint = d.mint AND p.source = d.trigger_source AND p.t0 = d.trigger_ts
+      WHERE d.stage = 'filter' AND d.ts > now() - make_interval(hours => ${hours})
+        AND p.completed_at IS NOT NULL AND p.max_ret IS NOT NULL
+    ), rows AS (
+      SELECT profile, unnest(failed_rules) AS rule, max_ret, rugged FROM f WHERE NOT passed
+      UNION ALL
+      SELECT profile, '(lolos filter)', max_ret, rugged FROM f WHERE passed
+      UNION ALL
+      SELECT profile, '(semua token)', max_ret, rugged FROM f
+    )
+    SELECT profile, rule, count(*)::int AS n,
+           round(100.0 * avg((max_ret >= 50)::int), 1) AS hit50,
+           round(100.0 * avg((max_ret >= 100)::int), 1) AS hit100,
+           round(100.0 * avg(rugged::int), 1) AS rug_rate,
+           round(percentile_cont(0.5) WITHIN GROUP (ORDER BY max_ret)::numeric, 1) AS med_max_ret
+    FROM rows GROUP BY 1, 2 ORDER BY 1, (rule LIKE '(%') DESC, n DESC`;
+}
+
+export async function tokenDetail(db: Db, mint: string) {
+  const [[token], triggers, decisions, [security], paths, ticks] = await Promise.all([
+    db`SELECT * FROM tokens WHERE mint = ${mint}`,
+    db`SELECT ts, source, kind FROM token_triggers WHERE mint = ${mint} ORDER BY ts DESC LIMIT 20`,
+    db`SELECT ts, profile, stage, passed, failed_rules, features, trigger_source
+       FROM decisions WHERE mint = ${mint} ORDER BY ts DESC LIMIT 30`,
+    db`SELECT * FROM security_reports WHERE mint = ${mint} ORDER BY ts DESC LIMIT 1`,
+    db`SELECT * FROM tracked_paths WHERE mint = ${mint} ORDER BY t0 DESC`,
+    db`SELECT ts, price_sol, price_usd, mcap_usd FROM ticks WHERE mint = ${mint}
+       AND ts > now() - interval '3 hours' ORDER BY ts`,
+  ]);
+  return { token: token ?? null, triggers, decisions, security: security ?? null, paths, ticks };
+}

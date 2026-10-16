@@ -52,3 +52,13 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 - **Alasan:** belum ada API key RPC/trade stream; 3 halaman masih sederhana. Elysia + React dipakai saat halaman interaktif (positions, config editor) masuk di Fase 3.
 - **Konsekuensi:** tick ±2–5 dtk, telat index ±1 menit untuk token baru; candle dari `trades_raw` belum terisi. Diganti/ditambah sumber on-chain begitu `HELIUS_API_KEY` ada.
 - **Referensi return Trigger Lab** = harga pasar pertama yang teramati (bukan harga create), lihat migrasi 0002.
+
+### ADR-012 · 2026-10-17 · accepted — Akses dashboard via IP Tailscale + login
+- **Keputusan:** dashboard bind ke IP tailnet (bukan publik, bukan `tailscale serve`), ufw allow 3000 hanya di `tailscale0`, plus login password (Argon2) + cookie session HMAC.
+- **Alasan:** user tidak punya display di VPS; `tailscale serve` butuh aktivasi HTTPS di admin tailnet. Trafik tailnet sudah terenkripsi WireGuard.
+- **Lanjutan:** kalau Serve/HTTPS diaktifkan, pindah ke `tailscale serve` + `DASHBOARD_SECURE_COOKIE=1`.
+
+### ADR-013 · 2026-10-17 · accepted — Security via RPC jsonParsed, enrichment Jupiter keyless
+- Mint/freeze authority & extension Token-2022 dibaca dari `getAccountInfo` encoding `jsonParsed` (RPC yang parse TLV) — tanpa parser biner sendiri. Extension tak dikenal = fail.
+- RPC publik dipakai sementara (set `SOLANA_RPC_URL` ke Helius begitu ada key). Gagal RPC = fail (bukan pass).
+- Pump.fun sekarang memakai Token-2022 dengan `metadataPointer` + `tokenMetadata` → dua extension ini dianggap aman.

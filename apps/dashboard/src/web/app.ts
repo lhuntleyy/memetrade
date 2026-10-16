@@ -26,7 +26,14 @@ const pct = (v: unknown) => {
 };
 const num = (v: unknown) => (v === null || v === undefined ? `<span class="muted">–</span>` : esc(v));
 const short = (mint: string) => `${mint.slice(0, 4)}…${mint.slice(-4)}`;
-const getJson = <T = Row[]>(url: string): Promise<T> => fetch(url).then((r) => r.json());
+const getJson = async <T = Row[]>(url: string): Promise<T> => {
+  const r = await fetch(url);
+  if (r.status === 401) {
+    location.href = "/login";
+    throw new Error("belum login");
+  }
+  return r.json();
+};
 
 // ---------- tabs ----------
 let current = "overview";
@@ -113,7 +120,7 @@ function feedRow(r: Row) {
   return `<tr>
     <td>${wib.format(new Date(String(r.ts)))}</td>
     <td>${esc(r.source)}.${esc(r.kind)}</td>
-    <td>${label} <a href="https://dexscreener.com/solana/${encodeURIComponent(mint)}" target="_blank" rel="noopener noreferrer"><code>${esc(short(mint))}</code></a></td>
+    <td>${label} <a href="#" data-mint="${esc(mint)}"><code>${esc(short(mint))}</code></a></td>
     <td>${pct(r.max_ret)}</td><td>${pct(r.min_ret)}</td><td>${pct(r.ret_5m)}</td><td>${status}</td></tr>`;
 }
 
@@ -188,6 +195,151 @@ async function loadLab() {
 }
 $<HTMLSelectElement>("#lab-hours").onchange = () => void loadLab();
 
+// ---------- pipeline ----------
+async function loadPipeline() {
+  const hours = $<HTMLSelectElement>("#pipe-hours").value;
+  const { funnel, reasons, effectiveness } = await getJson<{
+    funnel: Row[];
+    reasons: Row[];
+    effectiveness: Row[];
+  }>(`/api/pipeline?hours=${hours}`);
+  const empty = (cols: number) => `<tr><td colspan="${cols}" class="muted">Belum ada data.</td></tr>`;
+  const share = (a: unknown, b: unknown) =>
+    Number(b) ? ` <span class="muted">(${((Number(a) / Number(b)) * 100).toFixed(0)}%)</span>` : "";
+  $("#pipe-funnel tbody").innerHTML = funnel.length
+    ? funnel
+        .map(
+          (f) => `<tr><td><b>${esc(f.profile)}</b></td><td>${num(f.evaluated)}</td>
+        <td>${num(f.security_pass)}${share(f.security_pass, f.evaluated)}</td>
+        <td>${num(f.filter_pass)}${share(f.filter_pass, f.evaluated)}</td>
+        <td>${num(f.signals)}${share(f.signals, f.evaluated)}</td></tr>`,
+        )
+        .join("")
+    : empty(5);
+  $("#pipe-reasons tbody").innerHTML = reasons.length
+    ? reasons
+        .map(
+          (r) =>
+            `<tr><td>${esc(r.profile)}</td><td>${esc(r.stage)}</td><td><code>${esc(r.reason)}</code></td><td>${num(r.n)}</td></tr>`,
+        )
+        .join("")
+    : empty(4);
+  $("#pipe-eff tbody").innerHTML = effectiveness.length
+    ? effectiveness
+        .map((e) => {
+          const group = String(e.rule).startsWith("(");
+          return `<tr${group ? ' class="group"' : ""}><td>${esc(e.profile)}</td><td>${group ? `<b>${esc(e.rule)}</b>` : `<code>${esc(e.rule)}</code>`}</td>
+          <td>${num(e.n)}</td><td>${num(e.hit50 !== null ? `${e.hit50}%` : null)}</td><td>${num(e.hit100 !== null ? `${e.hit100}%` : null)}</td>
+          <td>${num(e.rug_rate !== null ? `${e.rug_rate}%` : null)}</td><td>${pct(e.med_max_ret)}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="7" class="muted">Belum ada path selesai untuk token yang dievaluasi (tunggu ±90 menit).</td></tr>`;
+}
+$<HTMLSelectElement>("#pipe-hours").onchange = () => void loadPipeline();
+
+// ---------- token explorer ----------
+function sparkline(points: number[], w = 600, h = 80) {
+  if (points.length < 2) return `<p class="muted">Belum ada tick harga.</p>`;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const span = max - min || 1;
+  const d = points
+    .map((v, i) => `${((i / (points.length - 1)) * w).toFixed(1)},${(h - ((v - min) / span) * h).toFixed(1)}`)
+    .join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${d}" /></svg>`;
+}
+
+async function loadToken(mint: string) {
+  $<HTMLInputElement>("#token-mint").value = mint;
+  const t = await getJson<{
+    token: Row | null;
+    triggers: Row[];
+    decisions: Row[];
+    security: Row | null;
+    paths: Row[];
+    ticks: Row[];
+  }>(`/api/token/${encodeURIComponent(mint)}`);
+  if (!t.token) {
+    $("#token-body").innerHTML = `<p class="muted">Token belum pernah tercatat.</p>`;
+    return;
+  }
+  const k = t.token;
+  const sec = t.security;
+  const ext = (sec?.extensions ?? {}) as { list?: string[]; warnings?: string[]; program?: string };
+  $("#token-body").innerHTML = `
+    <div class="grid">
+      ${card(`${k.symbol ?? "?"} — ${k.name ?? ""}`, null, [
+        ["mint", short(String(k.mint))],
+        ["launchpad", k.launchpad ?? "–"],
+        ["creator", k.creator ? short(String(k.creator)) : "–"],
+        ["pertama terlihat", wibFull.format(new Date(String(k.first_seen_at)))],
+        ["sumber pertama", k.first_source ?? "–"],
+        ["migrasi", k.migrated_at ? wibFull.format(new Date(String(k.migrated_at))) : "–"],
+      ])}
+      ${card("Security", sec ? sec.verdict === "pass" : null, [
+        ["hasil", sec ? String(sec.verdict).toUpperCase() : "belum dicek"],
+        ["alasan", sec && (sec.reasons as string[]).length ? (sec.reasons as string[]).join(", ") : "–"],
+        ["peringatan", ext.warnings?.length ? ext.warnings.join(", ") : "–"],
+        ["program", ext.program ?? "–"],
+        ["extension", ext.list?.length ? ext.list.join(", ") : "–"],
+      ])}
+    </div>
+    <p><a href="https://dexscreener.com/solana/${encodeURIComponent(String(k.mint))}" target="_blank" rel="noopener noreferrer">DexScreener</a> ·
+       <a href="https://solscan.io/token/${encodeURIComponent(String(k.mint))}" target="_blank" rel="noopener noreferrer">Solscan</a> ·
+       <a href="https://gmgn.ai/sol/token/${encodeURIComponent(String(k.mint))}" target="_blank" rel="noopener noreferrer">GMGN</a></p>
+    <h2>Harga (3 jam terakhir, SOL)</h2>
+    ${sparkline(t.ticks.map((x) => Number(x.price_sol)))}
+    <h2>Jalur harga per trigger</h2>
+    <div class="scroll"><table><thead><tr><th>Sumber</th><th>t0</th><th>Delay harga</th><th>1m</th><th>5m</th><th>15m</th><th>60m</th><th>Max</th><th>Min</th><th>Rug</th></tr></thead><tbody>
+    ${t.paths
+      .map(
+        (
+          p,
+        ) => `<tr><td>${esc(p.source)}</td><td>${wib.format(new Date(String(p.t0)))}</td><td>${num(p.ref_delay_sec !== null ? `${p.ref_delay_sec} dtk` : null)}</td>
+      <td>${pct(p.ret_1m)}</td><td>${pct(p.ret_5m)}</td><td>${pct(p.ret_15m)}</td><td>${pct(p.ret_60m)}</td><td>${pct(p.max_ret)}</td><td>${pct(p.min_ret)}</td>
+      <td>${p.rugged === null ? "–" : p.rugged ? '<span class="tag bad">ya</span>' : "tidak"}</td></tr>`,
+      )
+      .join("")}</tbody></table></div>
+    <h2>Keputusan pipeline</h2>
+    <div class="scroll"><table><thead><tr><th>Waktu</th><th>Profile</th><th>Tahap</th><th>Hasil</th><th>Alasan</th></tr></thead><tbody>
+    ${
+      t.decisions
+        .map(
+          (
+            d,
+          ) => `<tr><td>${wib.format(new Date(String(d.ts)))}</td><td>${esc(d.profile)}</td><td>${esc(d.stage)}</td>
+      <td>${d.passed ? '<span class="tag ok">lolos</span>' : '<span class="tag bad">gagal</span>'}</td>
+      <td>${(d.failed_rules as string[]).map((r) => `<code>${esc(r)}</code>`).join(" ")}</td></tr>`,
+        )
+        .join("") ||
+      '<tr><td colspan="5" class="muted">Token ini belum dievaluasi profile mana pun.</td></tr>'
+    }</tbody></table></div>
+    <h2>Fitur saat evaluasi terakhir</h2>
+    <pre class="features">${esc(JSON.stringify(t.decisions.find((d) => d.stage === "filter")?.features ?? {}, null, 2))}</pre>
+    <h2>Trigger</h2>
+    <p>${t.triggers.map((x) => `${wib.format(new Date(String(x.ts)))} <code>${esc(x.source)}.${esc(x.kind)}</code>`).join(" · ")}</p>`;
+}
+
+function openToken(mint: string) {
+  current = "token";
+  for (const x of document.querySelectorAll<HTMLButtonElement>("nav button"))
+    x.classList.toggle("active", x.dataset.tab === "token");
+  for (const s of document.querySelectorAll(".tab")) s.classList.toggle("active", s.id === "tab-token");
+  void loadToken(mint);
+}
+
+$("#token-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const mint = $<HTMLInputElement>("#token-mint").value.trim();
+  if (mint) openToken(mint);
+});
+document.addEventListener("click", (ev) => {
+  const a = (ev.target as HTMLElement).closest<HTMLElement>("a[data-mint]");
+  if (!a) return;
+  ev.preventDefault();
+  openToken(a.dataset.mint!);
+});
+
 // ---------- realtime ----------
 function connectWs() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -221,7 +373,9 @@ async function refresh() {
   try {
     if (current === "overview") await loadOverview();
     else if (current === "feed") await loadFeed();
-    else await loadLab();
+    else if (current === "lab") await loadLab();
+    else if (current === "pipeline") await loadPipeline();
+    // tab token tidak auto-refresh (hindari menimpa saat dibaca)
   } catch (err) {
     console.error(err);
   }

@@ -7,9 +7,9 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 | Fase | Status | Catatan |
 |---|---|---|
 | Perencanaan & riset | ✅ selesai | Dokumen lengkap di `PLAN.md` + `docs/` |
-| 0 — Fondasi | 🟢 hampir selesai | Sisa: Security Group Tencent, Tailscale, remote GitHub |
+| 0 — Fondasi | 🟢 hampir selesai | Sisa: cek Security Group Tencent |
 | 1 — Observasi data | 🟡 jalan | Collector + tracker + dashboard live 24/7; sisa: GMGN, harga on-chain, Telegram |
-| 2 — Enrichment/security/filter | ⚪ belum | |
+| 2 — Enrichment/security/filter | 🟡 jalan | Security on-chain + Jupiter + rule engine + shadow live; sisa: GMGN, simulasi jual, MTF |
 | 3 — Paper trading | ⚪ belum | |
 | 4 — Research loop & LLM | ⚪ belum | |
 | 5 — Micro live | ⚪ belum | Wajib approval user |
@@ -30,10 +30,10 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [ ] P0-08 Cek Security Group Tencent (inbound 22 saja)
 - [x] P0-09 User service `memebot`, direktori `/etc/memebot`, `/var/lib/memebot`, `/run/memebot`
 - [x] P0-10 PostgreSQL 17.11 + TimescaleDB 2.30.2, tuning 2 GB (`infra/postgres/memebot.conf`), role `memebot` & `memebot_ro`
-- [!] P0-11 Tailscale (atau alternatif akses dashboard)
+- [x] P0-11 Tailscale: node `memebot-vps` (100.112.11.86), dashboard bind ke IP tailnet + ufw allow port 3000 hanya di `tailscale0`
 
 ### Repo
-- [x] P0-12 git init + `.gitignore` + commit awal di `main` (remote GitHub private belum dibuat)
+- [x] P0-12 git + remote `lhuntleyy/memetrade` (deploy key write), push `main`
 - [x] P0-13 Bun workspaces: `apps/{core,dashboard,llm-worker,cli}`, `packages/{shared,db,solana}`
 - [x] P0-14 tsconfig strict (TS 7.0), Biome 2.5 (preset recommended), `bun test` jalan
 - [x] P0-15 zod schema config (strategy, trade, sources, llm) + loader YAML + hot reload + versi ke DB
@@ -54,22 +54,22 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [~] P1-07 Market tracker 90 menit/token via polling DexScreener (≤30 mint/req, ±2 dtk/putaran) ✅; sumber real-time on-chain (accountSubscribe) belum — **butuh HELIUS_API_KEY**
 - [~] P1-08 Tick → DB (`ticks`) ✅; candle CAGG 15s..4h siap tapi butuh `trades_raw` (trade stream) — belum ada sumber trade gratis
 - [x] P1-09 Hitung `tracked_paths` (ret, max/min, waktu, rugged)
-- [~] P1-10 Dashboard: Bun.serve + vanilla TS (Elysia/React ditunda, ADR-011); login belum — aman selama bind 127.0.0.1
+- [x] P1-10 Dashboard: Bun.serve + vanilla TS (Elysia/React ditunda, ADR-011) + login password (Argon2, cookie HMAC, throttle 5x/15 menit)
 - [x] P1-11 Dashboard: Overview (health), Live Feed
 - [x] P1-12 Dashboard: Trigger Lab (stat per sumber, heatmap jam)
 - [ ] P1-13 Telegram notifier dasar
 - [~] P1-14 Observasi jalan 24/7 sejak 2026-10-17 05:33 UTC (systemd `memebot-core` + `memebot-dashboard`); laporan setelah ≥ 7 hari
 
 ## Fase 2 — Enrichment, security, filter
-- [ ] P2-01 Provider adapter GMGN (token info/security/holders, created-tokens)
-- [ ] P2-02 Provider adapter Jupiter Tokens v2 (organic score, audit)
+- [!] P2-01 Provider adapter GMGN (token info/security/holders, created-tokens) — butuh GMGN_API_KEY
+- [x] P2-02 Provider adapter Jupiter Tokens v2 (holders, organic score, dev %, dev mints, traders/net buyers 5m) — keyless ±25 req/menit
 - [ ] P2-03 Provider Solana Tracker / RugCheck (cross-check, opsional)
-- [ ] P2-04 Rate limiter, cache, timeout, null gate, cross-check
-- [ ] P2-05 Security: authority + Token-2022 extension parser
-- [ ] P2-06 Security: simulasi jual + round-trip quote + blacklist
-- [ ] P2-07 Rule engine YAML + MTF evaluator + scoring + decision log
-- [ ] P2-08 Shadow tracking token ditolak
-- [ ] P2-09 Dashboard: Token Explorer, Pipeline funnel, Filter effectiveness
+- [~] P2-04 Rate limiter, cache (security 10 menit, Jupiter 60 dtk), timeout, null gate ✅; cross-check 2 provider belum (butuh GMGN/Solana Tracker)
+- [x] P2-05 Security: authority + Token-2022 extension (RPC jsonParsed) — tervalidasi dengan mint pump.fun asli
+- [ ] P2-06 Security: simulasi jual + round-trip quote + blacklist (butuh Jupiter quote/ RPC privat)
+- [~] P2-07 Rule engine YAML + decision log (security & filter) ✅; MTF & scoring belum (butuh candle dari trade stream)
+- [x] P2-08 Shadow: semua token yang dievaluasi tetap di-track; decisions ↔ tracked_paths via (mint, trigger_source, trigger_ts) — migrasi 0003
+- [x] P2-09 Dashboard: tab Pipeline (funnel, alasan ditolak, efektivitas filter) + Token Explorer (info, security, sparkline harga, jalur per trigger, keputusan, fitur)
 - [ ] P2-10 Review manual 50 token rug vs hasil security/filter
 
 ## Fase 3 — Paper trading
@@ -140,3 +140,12 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - Deploy: `/opt/memebot/app` (rsync dari repo), Bun untuk user `memebot`, unit `memebot-core` & `memebot-dashboard` aktif + enable on boot. Port dev dipindah ke 7072/3001 (`.env`) supaya tidak bentrok dengan prod 7071/3000.
 - Verifikasi: 30 test pass, tsc & biome bersih, smoke test live (PumpPortal ±12 token baru/menit, DexScreener 200 OK ±83 ms), relay WS terkirim. **Belum dicek visual di browser** (dashboard hanya 127.0.0.1 sampai Tailscale terpasang; sementara bisa via SSH tunnel `ssh -L 3000:127.0.0.1:3000 ubuntu@<ip-vps>`).
 - Belum: collector GMGN (butuh API key + whitelist IP), Meteora, notifier Telegram (butuh bot token), harga on-chain (butuh Helius key), login dashboard.
+
+### 2026-10-17 (lanjutan) — akses dashboard & Fase 2
+- Push ke GitHub `lhuntleyy/memetrade` berhasil (deploy key).
+- Akses dashboard: Tailscale terpasang (`memebot-vps`, 100.112.11.86). `tailscale serve` butuh fitur Serve/HTTPS diaktifkan di admin tailnet → sebagai gantinya dashboard bind langsung ke IP tailnet (drop-in `infra/systemd/memebot-dashboard.service.d/tailscale.conf`), ufw buka 3000 hanya di `tailscale0`. URL: `http://100.112.11.86:3000` (perangkat harus login Tailscale yang sama). Password: `sudo cat /etc/memebot/dashboard-password.txt`.
+- Login dashboard: semua `/api/*` dan `/ws` butuh session; dites (401 tanpa login, salah → error, benar → 200).
+- Fase 2: pipeline trigger → tunggu `wait_after_trigger_sec` → (tunggu pair DexScreener s/d 4×20 dtk) → Jupiter + DexScreener → security on-chain → filter → `decisions` (+ event Decision/Signal). Belum ada entry.
+- Temuan: Jupiter Tokens v2 meng-index token pump.fun baru jauh lebih cepat dari DexScreener (holderCount, harga, stats 5m sudah ada beberapa detik setelah create) → kandidat sumber harga awal (tapi keyless cuma ±0.5 RPS; butuh JUPITER_API_KEY untuk volume).
+- Config strategy disesuaikan dengan data yang ada: field GMGN (`top10_pct`, `bundler_pct`, `sniper_pct`, `dev_rug_ratio`) sementara `on_null: ignore`; `unique_buyers_1m`→`traders_5m`, `buy_sell_ratio_1m`→`buy_sell_ratio_5m`; critical fields = likuiditas & mcap.
+- `token_snapshots` belum ditulis terpisah — snapshot fitur disimpan di `decisions.features` (tahap filter).
