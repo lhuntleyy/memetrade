@@ -1,5 +1,7 @@
 # systemd units
 
+> Status: `memebot-core` & `memebot-dashboard` sudah ter-install & aktif sejak 2026-10-17. `memebot-llm` belum (Fase 4).
+
 Belum di-install (Fase 0 = template). Deploy pertama (saat Fase 1 siap jalan 24/7):
 
 ```bash

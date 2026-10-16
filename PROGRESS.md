@@ -8,7 +8,7 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 |---|---|---|
 | Perencanaan & riset | ✅ selesai | Dokumen lengkap di `PLAN.md` + `docs/` |
 | 0 — Fondasi | 🟢 hampir selesai | Sisa: Security Group Tencent, Tailscale, remote GitHub |
-| 1 — Observasi data | ⚪ belum | |
+| 1 — Observasi data | 🟡 jalan | Collector + tracker + dashboard live 24/7; sisa: GMGN, harga on-chain, Telegram |
 | 2 — Enrichment/security/filter | ⚪ belum | |
 | 3 — Paper trading | ⚪ belum | |
 | 4 — Research loop & LLM | ⚪ belum | |
@@ -45,20 +45,20 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [x] P0-21 `.env.example`
 
 ## Fase 1 — Observasi data
-- [ ] P1-01 Collector PumpPortal (new token + migration), 1 koneksi, reconnect + backoff
-- [ ] P1-02 Collector DexScreener (profiles, boosts latest/top) + rate limiter
+- [x] P1-01 Collector PumpPortal (new token + migration), 1 koneksi, reconnect + backoff
+- [x] P1-02 Collector DexScreener (profiles, boosts latest/top) + rate limiter
 - [!] P1-03 Collector GMGN (trending, trenches, hot) — butuh API key + whitelist IP
 - [ ] P1-04 Collector Meteora (opsional)
-- [ ] P1-05 Dedupe & normalisasi trigger → `token_triggers`, `tokens`
-- [ ] P1-06 Pool math: bonding curve pump.fun & PumpSwap (harga, quote lokal) + unit test
-- [ ] P1-07 Market tracker: subscribe harga 60–120 menit per token (stream/accountSubscribe)
-- [ ] P1-08 Tick → candle (in-memory 1s/15s + Timescale CAGG 1m..4h)
-- [ ] P1-09 Hitung `tracked_paths` (ret, max/min, waktu, rugged)
-- [ ] P1-10 Dashboard v0: server Bun + Elysia + SPA shell + auth
-- [ ] P1-11 Dashboard: Overview (health), Live Feed
-- [ ] P1-12 Dashboard: Trigger Lab (stat per sumber, heatmap jam)
+- [x] P1-05 Dedupe & normalisasi trigger → `token_triggers`, `tokens`
+- [~] P1-06 Pool math: harga bonding curve (virtual reserve) + constant product ✅; parser akun on-chain bonding curve/PumpSwap belum (butuh RPC)
+- [~] P1-07 Market tracker 90 menit/token via polling DexScreener (≤30 mint/req, ±2 dtk/putaran) ✅; sumber real-time on-chain (accountSubscribe) belum — **butuh HELIUS_API_KEY**
+- [~] P1-08 Tick → DB (`ticks`) ✅; candle CAGG 15s..4h siap tapi butuh `trades_raw` (trade stream) — belum ada sumber trade gratis
+- [x] P1-09 Hitung `tracked_paths` (ret, max/min, waktu, rugged)
+- [~] P1-10 Dashboard: Bun.serve + vanilla TS (Elysia/React ditunda, ADR-011); login belum — aman selama bind 127.0.0.1
+- [x] P1-11 Dashboard: Overview (health), Live Feed
+- [x] P1-12 Dashboard: Trigger Lab (stat per sumber, heatmap jam)
 - [ ] P1-13 Telegram notifier dasar
-- [ ] P1-14 Jalankan ≥ 7–14 hari, tulis laporan observasi di log
+- [~] P1-14 Observasi jalan 24/7 sejak 2026-10-17 05:33 UTC (systemd `memebot-core` + `memebot-dashboard`); laporan setelah ≥ 7 hari
 
 ## Fase 2 — Enrichment, security, filter
 - [ ] P2-01 Provider adapter GMGN (token info/security/holders, created-tokens)
@@ -129,3 +129,14 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - DB: PostgreSQL 17.11 + TimescaleDB 2.30.2, DB `memebot`, role rw/ro, password digenerate ke `/etc/memebot/secrets.env` (owner memebot) dan `.env` dev (gitignored, 600). Migrasi `0001_init` jalan; CAGG hierarkis 1m→5m teruji dengan data dummy; role ro tidak bisa insert.
 - Repo: Bun workspaces, zod schema 4 config + loader + hot reload (config invalid ditolak, versi lama tetap dipakai) + versi config tercatat di DB, event bus typed, logger pino (redact secret), pool math constant product, `memebot-core` (control API 127.0.0.1:7071 dengan auth, kill switch file/API, heartbeat), dashboard shell (127.0.0.1:3000: health core+DB, system events), CLI `migrate` & `config:check`, unit systemd.
 - Verifikasi: `bun test` 18 pass, `tsc` bersih, `biome check` bersih, smoke test core+dashboard+kill/resume+hot reload OK.
+
+### 2026-10-17 (lanjutan) — Fase 1
+- Commit Fase 0 `b07b48f` (lokal). Remote `origin` = `git@github-memetrade:lhuntleyy/memetrade.git` pakai deploy key `~/.ssh/memetrade_deploy` — **user perlu tambah deploy key (write) di GitHub** sebelum push.
+- Collector: PumpPortal (new token + migration, 1 koneksi, reconnect + watchdog sunyi 2 menit) dan DexScreener (profiles/boosts latest/top, dedupe 6 jam, putaran pertama ditandai `backlog` dan tidak di-track).
+- Market tracker: polling DexScreener `/tokens/v1` untuk semua token aktif, simpan `ticks`, hitung `tracked_paths` (ret 1/5/15/60m, max/min, rugged).
+- **Temuan metodologi:** awalnya referensi return = harga create dari virtual reserve → max return rata-rata +3.000% (tidak realistis, itu harga dev). Diganti: referensi = harga **pasar pertama yang teramati**, harga trigger disimpan terpisah + `ref_delay_sec` (migrasi `0002`).
+- **Temuan latency:** DexScreener baru meng-index token pump.fun baru median **±53 detik** setelah create → stat `pumpportal.new_token` = "kalau masuk ±1 menit setelah launch". Untuk entry lebih awal perlu harga on-chain bonding curve (Helius/RPC).
+- Dashboard: tab Overview (status core, collector, tracker), Live Feed (real-time via relay WS core → dashboard → browser; nama token di-escape anti-XSS), Trigger Lab (per sumber: hit +20/+50/+100%, rug rate, median max/return/menit ke puncak/delay harga; distribusi max return; heatmap jam WIB).
+- Deploy: `/opt/memebot/app` (rsync dari repo), Bun untuk user `memebot`, unit `memebot-core` & `memebot-dashboard` aktif + enable on boot. Port dev dipindah ke 7072/3001 (`.env`) supaya tidak bentrok dengan prod 7071/3000.
+- Verifikasi: 30 test pass, tsc & biome bersih, smoke test live (PumpPortal ±12 token baru/menit, DexScreener 200 OK ±83 ms), relay WS terkirim. **Belum dicek visual di browser** (dashboard hanya 127.0.0.1 sampai Tailscale terpasang; sementara bisa via SSH tunnel `ssh -L 3000:127.0.0.1:3000 ubuntu@<ip-vps>`).
+- Belum: collector GMGN (butuh API key + whitelist IP), Meteora, notifier Telegram (butuh bot token), harga on-chain (butuh Helius key), login dashboard.

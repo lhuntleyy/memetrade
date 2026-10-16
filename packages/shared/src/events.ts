@@ -1,8 +1,29 @@
 export type Source = "pumpportal" | "dexscreener" | "gmgn" | "meteora" | "wallet" | "telegram" | "manual";
 export type Stage = "filter" | "security" | "mtf" | "score" | "risk";
 
+/** Info token yang (kadang) sudah dibawa trigger — dipakai untuk upsert `tokens`. */
+export interface TokenMeta {
+  name?: string;
+  symbol?: string;
+  creator?: string;
+  launchpad?: string;
+  poolAddress?: string;
+  poolKind?: string;
+  /** harga SOL per token saat trigger, kalau diketahui */
+  priceSol?: number;
+  mcapSol?: number;
+}
+
 export type Event =
-  | { t: "TokenTriggered"; mint: string; source: Source; kind: string; ts: number; payload: unknown }
+  | {
+      t: "TokenTriggered";
+      mint: string;
+      source: Source;
+      kind: string;
+      ts: number;
+      payload: unknown;
+      meta?: TokenMeta;
+    }
   | { t: "TokenEnriched"; mint: string; snapshot: Record<string, unknown>; missing: string[] }
   | { t: "SecurityChecked"; mint: string; verdict: "pass" | "fail"; reasons: string[] }
   | {
@@ -15,7 +36,16 @@ export type Event =
       score?: number;
     }
   | { t: "Signal"; mint: string; profile: string; score: number }
-  | { t: "PriceTick"; mint: string; ts: number; priceSol: number; liquiditySol?: number }
+  | {
+      t: "PriceTick";
+      mint: string;
+      ts: number;
+      priceSol: number;
+      priceUsd?: number;
+      mcapUsd?: number;
+      liquidityUsd?: number;
+      source: string;
+    }
   | { t: "CircuitBreaker"; scope: string; reason: string; until?: number }
   | { t: "Control"; action: "pause" | "resume" | "kill" | "panic" | "reload"; actor: string; scope?: string }
   | { t: "Heartbeat"; service: string; ts: number; lagMs: number; rssMb: number };

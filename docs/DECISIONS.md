@@ -46,3 +46,9 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 
 ### ADR-010 · 2026-10-17 · accepted — Tooling: TypeScript 7, Biome 2.5, zod 4
 - `tsc` hanya untuk typecheck (Bun yang menjalankan TS), Biome untuk format + lint (preset recommended, `noNonNullAssertion` off karena `noUncheckedIndexedAccess` aktif), zod 4 untuk schema config.
+
+### ADR-011 · 2026-10-17 · accepted — Fase 1: harga via polling DexScreener, dashboard vanilla TS
+- **Keputusan:** sumber harga tracker sementara = DexScreener `/tokens/v1` (gratis, ≤30 mint/request, 300 rpm). Dashboard Fase 1 = `Bun.serve` + TypeScript vanilla (tanpa Elysia/React dulu).
+- **Alasan:** belum ada API key RPC/trade stream; 3 halaman masih sederhana. Elysia + React dipakai saat halaman interaktif (positions, config editor) masuk di Fase 3.
+- **Konsekuensi:** tick ±2–5 dtk, telat index ±1 menit untuk token baru; candle dari `trades_raw` belum terisi. Diganti/ditambah sumber on-chain begitu `HELIUS_API_KEY` ada.
+- **Referensi return Trigger Lab** = harga pasar pertama yang teramati (bukan harga create), lihat migrasi 0002.

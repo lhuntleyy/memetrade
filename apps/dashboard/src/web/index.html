@@ -7,11 +7,72 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
+    <header>
+      <div class="brand">memebot <small id="mode">…</small></div>
+      <nav>
+        <button type="button" data-tab="overview" class="active">Overview</button>
+        <button type="button" data-tab="feed">Live Feed</button>
+        <button type="button" data-tab="lab">Trigger Lab</button>
+      </nav>
+      <span id="ws-dot" title="stream real-time">○</span>
+    </header>
+
     <main>
-      <h1>memebot <small>Fase 0</small></h1>
-      <section id="health" class="grid"></section>
-      <h2>System events</h2>
-      <table id="events"><thead><tr><th>Waktu (WIB)</th><th>Service</th><th>Jenis</th><th>Pesan</th></tr></thead><tbody></tbody></table>
+      <section id="tab-overview" class="tab active">
+        <div id="health" class="grid"></div>
+        <h2>Collector & tracker</h2>
+        <div id="core-detail" class="grid"></div>
+        <h2>System events</h2>
+        <div class="scroll">
+          <table id="events">
+            <thead><tr><th>Waktu (WIB)</th><th>Service</th><th>Jenis</th><th>Pesan</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-feed" class="tab">
+        <p class="muted">Token masuk real-time. Return dihitung dari harga pasar pertama yang teramati (bukan harga create dev).</p>
+        <div class="scroll">
+          <table id="feed">
+            <thead>
+              <tr><th>Waktu</th><th>Sumber</th><th>Token</th><th>Max</th><th>Min</th><th>5m</th><th>Status</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-lab" class="tab">
+        <div class="toolbar">
+          Rentang:
+          <select id="lab-hours">
+            <option value="6">6 jam</option>
+            <option value="24" selected>24 jam</option>
+            <option value="72">3 hari</option>
+            <option value="168">7 hari</option>
+            <option value="720">30 hari</option>
+          </select>
+          <span class="muted">Hanya path yang sudah selesai di-track & punya data harga.</span>
+        </div>
+        <h2>Per sumber</h2>
+        <div class="scroll">
+          <table id="lab-sources">
+            <thead>
+              <tr>
+                <th>Sumber</th><th>Total</th><th>Jalan</th><th>Selesai</th><th>Tanpa harga</th>
+                <th>≥+20%</th><th>≥+50%</th><th>≥+100%</th><th>Rug</th>
+                <th>Med max</th><th>Med menit→peak</th><th>Med 5m</th><th>Med 15m</th><th>Med 60m</th><th>Delay harga</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h2>Distribusi max return</h2>
+        <div id="lab-dist" class="scroll"></div>
+        <h2>Heatmap hit ≥+50% per jam (WIB)</h2>
+        <div id="lab-heatmap" class="scroll"></div>
+      </section>
     </main>
     <script type="module" src="./app.ts"></script>
   </body>
