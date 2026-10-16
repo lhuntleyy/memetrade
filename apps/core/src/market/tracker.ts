@@ -173,14 +173,14 @@ export class MarketTracker {
         } catch (err) {
           const msg = String(err);
           this.log.warn({ err: msg, n: chunk.length }, "poll harga gagal");
-          // kena rate limit → jeda 15 dtk sebelum lanjut (jangan memperburuk)
-          if (msg.includes("HTTP 429")) await Bun.sleep(15_000);
+          // rate limit / jeda global → hentikan putaran ini (client yang mengatur lama jeda)
+          if (msg.includes("429") || msg.includes("dijeda")) break;
         }
       }
       this.stats.pollCycles++;
       this.stats.lastCycleMs = Math.round(performance.now() - t0);
-      // minimal 2 dtk per putaran (hemat kuota kalau token sedikit)
-      const wait = Math.max(0, 2000 - this.stats.lastCycleMs);
+      // minimal 4 dtk per putaran; kalau DexScreener sedang dijeda, tunggu sampai jeda selesai
+      const wait = Math.max(4000 - this.stats.lastCycleMs, this.dex.pausedForSec * 1000);
       await new Promise((r) => {
         this.loopTimer = setTimeout(r, wait);
       });

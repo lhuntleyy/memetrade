@@ -47,14 +47,30 @@ export class DexScreenerClient {
     this.pairLimiter = new RateLimiter(Math.floor(rpm.pairs * 0.9));
   }
 
+  /** jeda global setelah 429 (semua endpoint), naik eksponensial sampai 5 menit */
+  private pausedUntil = 0;
+  private strikes = 0;
+
+  get pausedForSec(): number {
+    return Math.max(0, Math.ceil((this.pausedUntil - Date.now()) / 1000));
+  }
+
   private async get<T>(path: string, limiter: RateLimiter, endpoint: string): Promise<T> {
+    if (Date.now() < this.pausedUntil)
+      throw new Error(`dexscreener ${endpoint} dijeda ${this.pausedForSec} dtk (rate limit)`);
     await limiter.take();
     const t0 = performance.now();
     let status = 0;
     try {
       const res = await fetch(`${this.baseUrl}${path}`, { signal: AbortSignal.timeout(8000) });
       status = res.status;
+      if (res.status === 429) {
+        this.strikes++;
+        this.pausedUntil = Date.now() + Math.min(300_000, 30_000 * 2 ** (this.strikes - 1));
+        throw new Error(`dexscreener ${endpoint} HTTP 429 — jeda ${this.pausedForSec} dtk`);
+      }
       if (!res.ok) throw new Error(`dexscreener ${endpoint} HTTP ${res.status}`);
+      this.strikes = Math.max(0, this.strikes - 1);
       return (await res.json()) as T;
     } finally {
       this.onUsage("dexscreener", endpoint, status, Math.round(performance.now() - t0));

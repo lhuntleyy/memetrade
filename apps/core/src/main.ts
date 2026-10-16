@@ -109,6 +109,7 @@ const control = startControlServer({
     tracker: { activeTokens: tracker.activeTokens, activePaths: tracker.activePaths, ...tracker.stats },
     triggers: triggerCounts,
     pipeline: pipeline.stats,
+    rpc: rpc.hosts(),
     journal: recorder.stats(),
   }),
   onControl: async (action, actor) => {

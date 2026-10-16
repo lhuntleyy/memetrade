@@ -61,7 +61,7 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [~] P1-14 Observasi jalan 24/7 sejak 2026-10-17 05:33 UTC (systemd `memebot-core` + `memebot-dashboard`); laporan setelah ≥ 7 hari
 
 ## Fase 2 — Enrichment, security, filter
-- [!] P2-01 Provider adapter GMGN (token info/security/holders, created-tokens) — butuh GMGN_API_KEY
+- [!] P2-01 Provider adapter GMGN — keypair Ed25519 sudah dibuat (`/etc/memebot/gmgn-keypair.pem`, publik di `infra/gmgn-public-key.pem`); **menunggu user buat API key di gmgn.ai + whitelist IP 43.156.246.199**
 - [x] P2-02 Provider adapter Jupiter Tokens v2 (holders, organic score, dev %, dev mints, traders/net buyers 5m) — keyless ±25 req/menit
 - [ ] P2-03 Provider Solana Tracker / RugCheck (cross-check, opsional)
 - [~] P2-04 Rate limiter, cache (security 10 menit, Jupiter 60 dtk), timeout, null gate ✅; cross-check 2 provider belum (butuh GMGN/Solana Tracker)
@@ -149,3 +149,10 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - Temuan: Jupiter Tokens v2 meng-index token pump.fun baru jauh lebih cepat dari DexScreener (holderCount, harga, stats 5m sudah ada beberapa detik setelah create) → kandidat sumber harga awal (tapi keyless cuma ±0.5 RPS; butuh JUPITER_API_KEY untuk volume).
 - Config strategy disesuaikan dengan data yang ada: field GMGN (`top10_pct`, `bundler_pct`, `sniper_pct`, `dev_rug_ratio`) sementara `on_null: ignore`; `unique_buyers_1m`→`traders_5m`, `buy_sell_ratio_1m`→`buy_sell_ratio_5m`; critical fields = likuiditas & mcap.
 - `token_snapshots` belum ditulis terpisah — snapshot fitur disimpan di `decisions.features` (tahap filter).
+
+### 2026-10-17 (lanjutan) — API key
+- `JUPITER_API_KEY` terpasang (prod `/etc/memebot/secrets.env` + dev `.env`) dan terverifikasi 200 di `api.jup.ag/tokens/v2`. Adapter otomatis pindah ke `api.jup.ag` + limit ±55 req/menit.
+- `HELIUS_API_KEY` / `SOLANA_RPC_URL` terpasang tapi Helius membalas **429 "max usage reached"** (kuota key habis / plan belum aktif). RPC client sekarang punya fallback otomatis: Helius → RPC publik, endpoint yang kena 429/5xx/timeout diistirahatkan 60 dtk (`packages/solana/src/rpc.ts`, ada test). Status endpoint terlihat di `/status` core.
+- GMGN: isi `gmgn-cli config` dibaca dulu (v1.6.7: hanya generate Ed25519 PKCS8/SPKI + link `gmgn.ai/ai/generateapi?pbk=`). Keypair dibuat setara dengan `openssl`, private key disimpan di `/etc/memebot/gmgn-keypair.pem` (600, owner memebot) — sengaja **tidak** di `~/.config/gmgn/` supaya skill AI agent tidak bisa memakai kunci untuk swap.
+- DexScreener mulai membalas 429 ke IP VPS (padahal beban ±30 req/menit). Ditambah jeda global eksponensial 30 dtk → 5 menit setelah 429, putaran poll harga min 4 dtk, feed profile/boost dilonggarkan (30/30/120 dtk).
+- Telegram dilewati dulu (keputusan user).
