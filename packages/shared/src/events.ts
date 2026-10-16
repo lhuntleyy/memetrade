@@ -46,6 +46,18 @@ export type Event =
       liquidityUsd?: number;
       source: string;
     }
+  | {
+      t: "Position";
+      action: "opened" | "partial" | "closed" | "entry_failed" | "risk_rejected";
+      id: number | null;
+      mint: string;
+      profile: string;
+      mode: "paper" | "live";
+      symbol?: string | null;
+      pnlPct?: number;
+      pnlSol?: number;
+      reason?: string;
+    }
   | { t: "CircuitBreaker"; scope: string; reason: string; until?: number }
   | { t: "Control"; action: "pause" | "resume" | "kill" | "panic" | "reload"; actor: string; scope?: string }
   | { t: "Heartbeat"; service: string; ts: number; lagMs: number; rssMb: number };

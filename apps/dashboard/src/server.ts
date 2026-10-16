@@ -2,7 +2,10 @@ import { createDb } from "@memebot/db";
 import { createLogger } from "@memebot/shared";
 import { createAuth, LOGIN_PAGE } from "./auth.ts";
 import {
+  closedPositions,
   counts,
+  equityCurve,
+  exitReasons,
   filterEffectiveness,
   labDistribution,
   labHeatmap,
@@ -11,6 +14,7 @@ import {
   recentTriggers,
   rejectReasons,
   tokenDetail,
+  tradingKpi,
 } from "./queries.ts";
 import index from "./web/index.html";
 
@@ -46,6 +50,15 @@ const coreStatus = () =>
   })
     .then((r) => (r.ok ? r.json() : { ok: false, http: r.status }))
     .catch(() => ({ ok: false }));
+
+/** Teruskan perintah ke control API core; actor = "dashboard:<ip>" (tercatat di control_events). */
+function coreCommand(path: string, req: Request) {
+  return fetch(`${coreUrl}${path}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${secret}`, "x-actor": `dashboard:${clientIp(req)}` },
+    signal: AbortSignal.timeout(30_000),
+  }).catch(() => new Response(JSON.stringify({ error: "core tidak bisa dihubungi" }), { status: 502 }));
+}
 
 /** IP klien: dari header tailscale serve kalau ada, selain itu alamat socket. */
 let clientIp: (req: Request) => string = () => "unknown";
@@ -100,6 +113,42 @@ const server = Bun.serve({
         return Response.json({ error: "mint tidak valid" }, { status: 400 });
       return Response.json(await tokenDetail(db, mint));
     }),
+    "/api/positions": guard(async () => {
+      const r = await fetch(`${coreUrl}/positions`, {
+        headers: { authorization: `Bearer ${secret}` },
+        signal: AbortSignal.timeout(2000),
+      }).catch(() => null);
+      return Response.json(r?.ok ? await r.json() : [], { status: r?.ok ? 200 : 502 });
+    }),
+    "/api/positions/:id/close": {
+      POST: guard(async (req) => {
+        const id = (req as Request & { params: { id: string } }).params.id;
+        if (!/^\d+$/.test(id)) return Response.json({ error: "id tidak valid" }, { status: 400 });
+        const r = await coreCommand(`/positions/${id}/close`, req);
+        return Response.json(await r.json().catch(() => ({})), { status: r.status });
+      }),
+    },
+    "/api/control/:action": {
+      POST: guard(async (req) => {
+        const action = (req as Request & { params: { action: string } }).params.action;
+        if (!["pause", "resume", "kill", "panic"].includes(action))
+          return Response.json({ error: "aksi tidak dikenal" }, { status: 400 });
+        const r = await coreCommand(`/control/${action}`, req);
+        return Response.json(await r.json().catch(() => ({})), { status: r.status });
+      }),
+    },
+    "/api/trades": guard(async (req) => {
+      const u = new URL(req.url);
+      const mode = u.searchParams.get("mode") === "live" ? "live" : "paper";
+      const limit = clampInt(u.searchParams.get("limit"), 200, 1, 1000);
+      const [[kpi], reasons, equity, trades] = await Promise.all([
+        tradingKpi(db, mode),
+        exitReasons(db, mode),
+        equityCurve(db, mode),
+        closedPositions(db, limit),
+      ]);
+      return Response.json({ kpi, reasons, equity, trades });
+    }),
     "/api/system/events": guard(async () =>
       Response.json(
         await db`SELECT ts, level, service, kind, message, data FROM system_events
@@ -135,7 +184,7 @@ clientIp = (req) =>
   "unknown";
 
 // ---- relay event dari core → browser (hanya event ringan) ----
-const RELAY = new Set(["TokenTriggered", "Heartbeat", "Control", "CircuitBreaker"]);
+const RELAY = new Set(["TokenTriggered", "Heartbeat", "Control", "CircuitBreaker", "Position"]);
 let attempt = 0;
 function connectCore() {
   const ws = new WebSocket(`ws://127.0.0.1:${corePort}/events?secret=${encodeURIComponent(secret)}`);

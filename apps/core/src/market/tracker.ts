@@ -73,6 +73,24 @@ export class MarketTracker {
     void this.pollLoop();
   }
 
+  /** mint yang dipantau tanpa batas waktu (posisi terbuka) */
+  private pinned = new Set<string>();
+
+  /** Pantau harga mint terus-menerus (dipakai position manager selama posisi terbuka). */
+  pin(mint: string) {
+    this.pinned.add(mint);
+    if (!this.byMint.has(mint)) this.byMint.set(mint, new Set());
+  }
+
+  unpin(mint: string) {
+    this.pinned.delete(mint);
+    const set = this.byMint.get(mint);
+    if (set && set.size === 0) {
+      this.byMint.delete(mint);
+      this.latest.delete(mint);
+    }
+  }
+
   /** Pair terbaru untuk mint yang sedang di-track (null kalau belum ter-index / umur > maxAgeMs). */
   latestPair(mint: string, maxAgeMs = 30_000): DexPair | null {
     const l = this.latest.get(mint);
@@ -121,7 +139,7 @@ export class MarketTracker {
         this.paths.delete(key);
         const set = this.byMint.get(p.mint);
         set?.delete(key);
-        if (set && set.size === 0) {
+        if (set && set.size === 0 && !this.pinned.has(p.mint)) {
           this.byMint.delete(p.mint);
           this.latest.delete(p.mint);
         }

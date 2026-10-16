@@ -340,6 +340,126 @@ document.addEventListener("click", (ev) => {
   openToken(a.dataset.mint!);
 });
 
+// ---------- posisi & kontrol ----------
+const dur = (ms: number) => {
+  const m = Math.floor(ms / 60_000);
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}j ${m % 60}m`;
+};
+const sol = (v: unknown, d = 4) => (v === null || v === undefined ? "–" : `${Number(v).toFixed(d)}`);
+
+async function postJson(url: string) {
+  const r = await fetch(url, { method: "POST" });
+  if (r.status === 401) location.href = "/login";
+  return { ok: r.ok, body: await r.json().catch(() => ({})) };
+}
+
+async function loadPositions() {
+  const rows = await getJson("/api/positions");
+  $("#positions tbody").innerHTML = rows.length
+    ? rows
+        .map((p) => {
+          const mint = String(p.mint);
+          const exitState = [
+            Number(p.ladderDone) > 0 ? `TP ${p.ladderDone}` : "",
+            p.breakEvenArmed ? "BE aktif" : "",
+          ]
+            .filter(Boolean)
+            .join(", ");
+          return `<tr><td>${esc(p.id)}</td>
+          <td>${p.symbol ? `<b>${esc(p.symbol)}</b> ` : ""}<a href="#" data-mint="${esc(mint)}"><code>${esc(short(mint))}</code></a></td>
+          <td>${esc(p.profile)}</td><td>${dur(Date.now() - Number(p.openedAt))}</td><td>${sol(p.costSol)}</td>
+          <td>${pct(p.pnlPct)}</td><td>${pct(p.peakPnlPct)}</td><td>${(Number(p.soldFrac) * 100).toFixed(0)}%</td>
+          <td>${esc(exitState || "–")}</td>
+          <td><button type="button" class="btn small" data-close="${esc(p.id)}">Jual</button></td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="10" class="muted">Tidak ada posisi terbuka.</td></tr>`;
+}
+
+document.addEventListener("click", async (ev) => {
+  const el = ev.target as HTMLElement;
+  const ctl = el.closest<HTMLElement>("[data-control]")?.dataset.control;
+  if (ctl) {
+    const warn: Record<string, string> = {
+      kill: "Stop semua entry baru? (posisi tetap dikelola exit engine)",
+      panic: "PANIC: jual SEMUA posisi sekarang dan stop entry?",
+    };
+    if (warn[ctl] && !confirm(warn[ctl])) return;
+    const r = await postJson(`/api/control/${ctl}`);
+    $("#control-msg").textContent = r.ok ? `${ctl} OK` : `gagal: ${JSON.stringify(r.body)}`;
+    void refresh();
+    return;
+  }
+  const id = el.closest<HTMLElement>("[data-close]")?.dataset.close;
+  if (id) {
+    if (!confirm(`Jual posisi #${id} 100% sekarang?`)) return;
+    const r = await postJson(`/api/positions/${id}/close`);
+    toast(r.ok ? `Posisi #${id} dijual` : `Gagal jual #${id}`);
+    void loadPositions();
+  }
+});
+
+// ---------- trades ----------
+async function loadTrades() {
+  const { kpi, reasons, equity, trades } = await getJson<{
+    kpi: Row;
+    reasons: Row[];
+    equity: Row[];
+    trades: Row[];
+  }>("/api/trades?mode=paper");
+  $("#trade-kpi").innerHTML =
+    card("Hasil (paper)", kpi.trades ? Number(kpi.pnl_sol) >= 0 : null, [
+      ["trade selesai", kpi.trades],
+      ["win rate", kpi.win_rate !== null ? `${kpi.win_rate}%` : "–"],
+      ["PnL total", `${sol(kpi.pnl_sol)} SOL`],
+      ["PnL hari ini", `${sol(kpi.pnl_today_sol)} SOL`],
+    ]) +
+    card("Kualitas", null, [
+      ["profit factor", kpi.profit_factor ?? "–"],
+      ["expectancy / trade", `${sol(kpi.expectancy_sol, 5)} SOL`],
+      ["rata-rata win", kpi.avg_win_pct !== null ? `+${kpi.avg_win_pct}%` : "–"],
+      ["rata-rata loss", kpi.avg_loss_pct !== null ? `${kpi.avg_loss_pct}%` : "–"],
+    ]) +
+    card("Biaya", null, [
+      ["fee jaringan total", `${sol(kpi.fees_sol)} SOL`],
+      ["entry gagal (simulasi)", kpi.entry_failed],
+    ]);
+  $("#trade-equity").innerHTML = sparkline(equity.map((e) => Number(e.equity)));
+  $("#trade-reasons tbody").innerHTML = reasons.length
+    ? reasons
+        .map(
+          (r) => `<tr><td>${esc(r.exit_reason)}</td><td>${num(r.n)}</td><td>${pct(r.avg_pnl_pct)}</td></tr>`,
+        )
+        .join("")
+    : `<tr><td colspan="3" class="muted">Belum ada trade selesai.</td></tr>`;
+  $("#trades tbody").innerHTML = trades.length
+    ? trades
+        .map((t) => {
+          const mint = String(t.mint);
+          const failed = t.status === "ENTRY_FAILED";
+          const d =
+            t.closed_at && t.opened_at
+              ? dur(new Date(String(t.closed_at)).getTime() - new Date(String(t.opened_at)).getTime())
+              : "–";
+          return `<tr><td>${esc(t.id)}</td><td>${t.closed_at ? wibFull.format(new Date(String(t.closed_at))) : "–"}</td>
+          <td>${t.symbol ? `<b>${esc(t.symbol)}</b> ` : ""}<a href="#" data-mint="${esc(mint)}"><code>${esc(short(mint))}</code></a></td>
+          <td>${esc(t.profile)}</td><td>${d}</td><td>${sol(t.cost_sol ?? t.size_sol)}</td>
+          <td>${failed ? "–" : sol(t.realized_pnl_sol)}</td><td>${failed ? "–" : pct(t.pnl_pct)}</td><td>${pct(t.mfe_pct)}</td>
+          <td>${sol(t.fees_sol, 5)}</td><td>${failed ? `<span class="tag bad">entry gagal: ${esc(t.exit_reason)}</span>` : esc(t.exit_reason)}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="11" class="muted">Belum ada trade.</td></tr>`;
+}
+
+// ---------- toast ----------
+function toast(msg: string) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  $("#toasts").append(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
 // ---------- realtime ----------
 function connectWs() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -350,6 +470,17 @@ function connectWs() {
   };
   ws.onmessage = (ev) => {
     const e = JSON.parse(String(ev.data));
+    if (e.t === "Position") {
+      const label = e.symbol ?? short(String(e.mint));
+      const msg: Record<string, string> = {
+        opened: `ENTRY ${label} (${e.profile})`,
+        partial: `Jual sebagian ${label} — ${e.reason}`,
+        closed: `EXIT ${label} ${e.pnlPct >= 0 ? "+" : ""}${Number(e.pnlPct).toFixed(1)}% — ${e.reason}`,
+        entry_failed: `Entry gagal ${label}: ${e.reason}`,
+      };
+      if (msg[e.action]) toast(msg[e.action]!);
+      if (current === "positions") void loadPositions();
+    }
     if (e.t === "TokenTriggered" && current === "feed") {
       const tbody = $("#feed tbody");
       tbody.insertAdjacentHTML(
@@ -375,6 +506,8 @@ async function refresh() {
     else if (current === "feed") await loadFeed();
     else if (current === "lab") await loadLab();
     else if (current === "pipeline") await loadPipeline();
+    else if (current === "positions") await loadPositions();
+    else if (current === "trades") await loadTrades();
     // tab token tidak auto-refresh (hindari menimpa saat dibaca)
   } catch (err) {
     console.error(err);

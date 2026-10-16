@@ -11,6 +11,9 @@ dexscreener:
   base_url: "https://api.dexscreener.com"
   poll_sec: { profiles: 30, boosts_latest: 30, boosts_top: 120 }   # dilonggarkan setelah kena 429 (2026-10-17)
   rpm: { profiles: 60, pairs: 300 }
+  # proxy (env DEXSCREENER_PROXY_URL): fallback = langsung dulu, lewat proxy hanya saat IP VPS kena 429.
+  # always ≈ 1.9 GB/hari trafik proxy (residential dibayar per GB) — hati-hati biaya.
+  proxy_mode: fallback
 
 gmgn:
   enabled: false             # butuh GMGN_API_KEY + whitelist IP VPS

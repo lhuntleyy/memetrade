@@ -143,3 +143,45 @@ export async function tokenDetail(db: Db, mint: string) {
   ]);
   return { token: token ?? null, triggers, decisions, security: security ?? null, paths, ticks };
 }
+
+// ---------------- Fase 3: trading (paper) ----------------
+
+export function closedPositions(db: Db, limit: number) {
+  return db`
+    SELECT id, mint, symbol, profile, mode, opened_at, closed_at, size_sol, cost_sol, proceeds_sol, fees_sol,
+           realized_pnl_sol, pnl_pct, mfe_pct, mae_pct, exit_reason, status
+    FROM positions WHERE status IN ('CLOSED', 'ENTRY_FAILED')
+    ORDER BY COALESCE(closed_at, opened_at) DESC NULLS LAST LIMIT ${limit}`;
+}
+
+export function tradingKpi(db: Db, mode: string) {
+  return db`
+    WITH c AS (SELECT * FROM positions WHERE status = 'CLOSED' AND mode = ${mode})
+    SELECT
+      count(*)::int AS trades,
+      count(*) FILTER (WHERE realized_pnl_sol > 0)::int AS wins,
+      round(100.0 * avg((realized_pnl_sol > 0)::int), 1) AS win_rate,
+      round(COALESCE(sum(realized_pnl_sol), 0)::numeric, 4) AS pnl_sol,
+      round(COALESCE(sum(fees_sol), 0)::numeric, 4) AS fees_sol,
+      round(avg(pnl_pct) FILTER (WHERE realized_pnl_sol > 0)::numeric, 1) AS avg_win_pct,
+      round(avg(pnl_pct) FILTER (WHERE realized_pnl_sol <= 0)::numeric, 1) AS avg_loss_pct,
+      round((sum(realized_pnl_sol) FILTER (WHERE realized_pnl_sol > 0) /
+             NULLIF(abs(sum(realized_pnl_sol) FILTER (WHERE realized_pnl_sol <= 0)), 0))::numeric, 2) AS profit_factor,
+      round(avg(realized_pnl_sol)::numeric, 5) AS expectancy_sol,
+      round(COALESCE(sum(realized_pnl_sol) FILTER (WHERE closed_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'), 0)::numeric, 4) AS pnl_today_sol,
+      (SELECT count(*) FROM positions WHERE status = 'ENTRY_FAILED' AND mode = ${mode})::int AS entry_failed
+    FROM c`;
+}
+
+export function exitReasons(db: Db, mode: string) {
+  return db`
+    SELECT exit_reason, count(*)::int AS n, round(avg(pnl_pct)::numeric, 1) AS avg_pnl_pct
+    FROM positions WHERE status = 'CLOSED' AND mode = ${mode}
+    GROUP BY 1 ORDER BY n DESC`;
+}
+
+export function equityCurve(db: Db, mode: string) {
+  return db`
+    SELECT closed_at, sum(realized_pnl_sol) OVER (ORDER BY closed_at)::float AS equity
+    FROM positions WHERE status = 'CLOSED' AND mode = ${mode} ORDER BY closed_at`;
+}

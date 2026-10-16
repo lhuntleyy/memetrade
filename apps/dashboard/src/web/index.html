@@ -11,6 +11,8 @@
       <div class="brand">memebot <small id="mode">…</small></div>
       <nav>
         <button type="button" data-tab="overview" class="active">Overview</button>
+        <button type="button" data-tab="positions">Posisi</button>
+        <button type="button" data-tab="trades">Trades</button>
         <button type="button" data-tab="feed">Live Feed</button>
         <button type="button" data-tab="lab">Trigger Lab</button>
         <button type="button" data-tab="pipeline">Pipeline</button>
@@ -29,6 +31,45 @@
         <div class="scroll">
           <table id="events">
             <thead><tr><th>Waktu (WIB)</th><th>Service</th><th>Jenis</th><th>Pesan</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-positions" class="tab">
+        <div class="toolbar">
+          <span class="muted">Kontrol bot:</span>
+          <button type="button" class="btn" data-control="pause">Pause</button>
+          <button type="button" class="btn" data-control="resume">Resume</button>
+          <button type="button" class="btn warn" data-control="kill">Kill (stop entry)</button>
+          <button type="button" class="btn danger" data-control="panic">Panic (jual semua)</button>
+          <span id="control-msg" class="muted"></span>
+        </div>
+        <p class="muted">Mode PAPER — tidak ada uang asli. PnL dihitung dari nilai jual executable (setelah estimasi biaya exit).</p>
+        <div class="scroll">
+          <table id="positions">
+            <thead>
+              <tr><th>#</th><th>Token</th><th>Profile</th><th>Umur</th><th>Modal</th><th>PnL</th><th>Peak</th><th>Terjual</th><th>Status exit</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-trades" class="tab">
+        <div id="trade-kpi" class="grid"></div>
+        <h2>Kurva equity (PnL kumulatif, SOL)</h2>
+        <div id="trade-equity"></div>
+        <h2>Alasan exit</h2>
+        <div class="scroll">
+          <table id="trade-reasons"><thead><tr><th>Alasan</th><th>Jumlah</th><th>Rata-rata PnL</th></tr></thead><tbody></tbody></table>
+        </div>
+        <h2>Riwayat</h2>
+        <div class="scroll">
+          <table id="trades">
+            <thead>
+              <tr><th>#</th><th>Tutup</th><th>Token</th><th>Profile</th><th>Durasi</th><th>Modal</th><th>PnL SOL</th><th>PnL</th><th>MFE</th><th>Fee</th><th>Exit</th></tr>
+            </thead>
             <tbody></tbody>
           </table>
         </div>
@@ -119,6 +160,7 @@
         <div id="token-body"><p class="muted">Masukkan mint, atau klik token di Live Feed.</p></div>
       </section>
     </main>
+    <div id="toasts"></div>
     <script type="module" src="./app.ts"></script>
   </body>
 </html>

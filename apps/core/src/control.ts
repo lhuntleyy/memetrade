@@ -10,6 +10,10 @@ interface Options {
   log: Logger;
   status: () => Record<string, unknown>;
   onControl: (action: ControlAction, actor: string) => Promise<void>;
+  /** jual manual satu posisi (100%) — false kalau posisi tidak ditemukan */
+  onClosePosition?: (id: number, actor: string) => Promise<boolean>;
+  /** daftar posisi terbuka live (untuk dashboard) */
+  positions?: () => unknown[];
 }
 
 /**
@@ -38,6 +42,14 @@ export function startControlServer(o: Options) {
       }
       if (url.pathname === "/status" && req.method === "GET") return Response.json(o.status());
 
+      if (url.pathname === "/positions" && req.method === "GET") return Response.json(o.positions?.() ?? []);
+      const pm = url.pathname.match(/^\/positions\/(\d+)\/close$/);
+      if (pm && req.method === "POST" && o.onClosePosition) {
+        const actor = req.headers.get("x-actor") ?? "unknown";
+        o.log.warn({ id: pm[1], actor }, "jual manual posisi");
+        const ok = await o.onClosePosition(Number(pm[1]), actor);
+        return Response.json({ ok }, { status: ok ? 200 : 404 });
+      }
       const m = url.pathname.match(/^\/control\/([a-z]+)$/);
       if (m && req.method === "POST") {
         const action = m[1] as ControlAction;

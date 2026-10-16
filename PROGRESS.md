@@ -10,7 +10,7 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 | 0 — Fondasi | 🟢 hampir selesai | Sisa: cek Security Group Tencent |
 | 1 — Observasi data | 🟡 jalan | Collector + tracker + dashboard live 24/7; sisa: GMGN, harga on-chain, Telegram |
 | 2 — Enrichment/security/filter | 🟡 jalan | Security on-chain + Jupiter + rule engine + shadow live; sisa: GMGN, simulasi jual, MTF |
-| 3 — Paper trading | ⚪ belum | |
+| 3 — Paper trading | 🟡 jalan | Engine paper live; sinyal masih jarang karena filter ketat & baru 2 profile |
 | 4 — Research loop & LLM | ⚪ belum | |
 | 5 — Micro live | ⚪ belum | Wajib approval user |
 | 6 — Scale | ⚪ belum | |
@@ -73,15 +73,15 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [ ] P2-10 Review manual 50 token rug vs hasil security/filter
 
 ## Fase 3 — Paper trading
-- [ ] P3-01 Profile `migration_momentum`
-- [ ] P3-02 Profile `trending_momentum`
-- [ ] P3-03 Risk manager + circuit breaker + kill switch (file, dashboard, Telegram)
-- [ ] P3-04 Paper executor realistis (latency, quote, fee, p_fail)
-- [ ] P3-05 Position manager + exit engine lengkap + unit test
-- [ ] P3-06 Journal (orders, fills, positions, marks, daily_stats)
-- [ ] P3-07 Dashboard: Positions, Trades, KPI, equity curve, kontrol
-- [ ] P3-08 Telegram: entry/exit + perintah
-- [ ] P3-09 Kumpulkan ≥ 300 trade/profile → evaluasi go-live
+- [x] P3-01 Profile `migration_momentum` (paper; MTF belum)
+- [x] P3-02 Profile `trending_momentum` (paper; MTF belum)
+- [~] P3-03 Risk manager (limit posisi/exposure/saldo, cooldown, daily loss & profit lock, jam trading, loss beruntun) + kill/panic via file & dashboard ✅; breaker data basi/RPC/slippage & Telegram belum
+- [x] P3-04 Paper executor: latency, quote Jupiter Swap V2 asli, fee jaringan/platform, rent ATA, p_fail, batas price impact, sanity quote jual
+- [~] P3-05 Position manager + exit engine (SL, break-even, trailing bertingkat, TP ladder, momentum-fail, stale, max hold, manual, panic) + restore setelah restart ✅; event exit (dev jual dsb) & structure SL belum (butuh data holder/candle)
+- [x] P3-06 Journal: orders, fills, positions, position_marks (daily_stats dihitung via query)
+- [x] P3-07 Dashboard: tab Posisi (live, jual manual, pause/resume/kill/panic) + Trades (KPI, equity, alasan exit, riwayat) + toast real-time
+- [!] P3-08 Telegram — dilewati dulu (keputusan user)
+- [~] P3-09 Paper trading jalan sejak 2026-10-17 07:3x UTC — kumpulkan ≥ 300 trade/profile
 
 ## Fase 4 — Research loop & LLM
 - [ ] P4-01 CLI replay event-driven
@@ -156,3 +156,17 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - GMGN: isi `gmgn-cli config` dibaca dulu (v1.6.7: hanya generate Ed25519 PKCS8/SPKI + link `gmgn.ai/ai/generateapi?pbk=`). Keypair dibuat setara dengan `openssl`, private key disimpan di `/etc/memebot/gmgn-keypair.pem` (600, owner memebot) — sengaja **tidak** di `~/.config/gmgn/` supaya skill AI agent tidak bisa memakai kunci untuk swap.
 - DexScreener mulai membalas 429 ke IP VPS (padahal beban ±30 req/menit). Ditambah jeda global eksponensial 30 dtk → 5 menit setelah 429, putaran poll harga min 4 dtk, feed profile/boost dilonggarkan (30/30/120 dtk).
 - Telegram dilewati dulu (keputusan user).
+
+### 2026-10-17 (lanjutan) — Helius, proxy, akses, Fase 3
+- Helius key baru terpasang & sehat (getSlot 200 ±45 ms) — jadi RPC utama, RPC publik tetap cadangan.
+- Proxy residential Geonode SG (`DEXSCREENER_PROXY_URL`) terpasang dengan mode **fallback**: request langsung dari IP VPS; lewat proxy hanya saat IP VPS kena 429. Alasan: mode always ≈ 1.3 MB/menit ≈ 1.9 GB/hari (residential dibayar per GB). Bisa diganti di `config/sources.yaml` (`proxy_mode`).
+- Dashboard tidak bisa dibuka user: tailnet hanya berisi `memebot-vps` — perangkat user belum join Tailscale. Solusi: install app Tailscale di HP/laptop & login akun yang sama.
+- GMGN ditunda (keputusan user); keypair tetap tersimpan untuk nanti.
+- Fase 3 paper trading:
+  - `trading/exit-engine.ts` (murni, dites): PnL dari nilai jual executable; urutan SL → break-even → trailing (poin dari peak) → TP ladder (% posisi awal) → momentum-fail → stale → max hold.
+  - `trading/risk.ts` (murni, dites): kill, max posisi (global/profile), averaging down, cooldown, trade/hari, daily loss, profit lock (stop/halve), jam trading (lintas tengah malam), loss beruntun, exposure, saldo minimum.
+  - `trading/paper-executor.ts`: delay latency → quote Jupiter Swap V2 asli (`/order` tanpa taker) → fallback estimasi lokal; biaya jaringan + rent ATA; p_fail. Uji: BONK 0.1 SOL round-trip ±0.5%; token baru migrasi → quote liar (impact 151%) → ditambah batas `max_price_impact_pct` saat entry & sanity check saat jual.
+  - `trading/position-manager.ts`: Signal → risk (dicatat sebagai decision stage `risk`) → entry → pin harga di tracker → exit tiap tick + cek berkala 5 dtk → partial/close; restore posisi & statistik harian dari DB saat restart; jual manual & panic lewat control API.
+  - Uji end-to-end ke DB asli dengan mint palsu: opened → TP1 (40%) → trailing → CLOSED, +26.4% setelah fee; order/fill/decision tercatat; data uji dihapus.
+  - 58 test pass, tsc & biome bersih. Deploy produksi OK.
+- Catatan jujur: sinyal akan jarang (filter ketat, MTF & data GMGN belum ada, hanya 2 profile). Target 300 trade/profile bisa lama → pertimbangkan profile "eksplorasi" yang lebih longgar khusus paper untuk belajar lebih cepat.

@@ -18,6 +18,8 @@ import { startRecorder } from "./journal/recorder.ts";
 import { KillSwitch } from "./kill-switch.ts";
 import { MarketTracker } from "./market/tracker.ts";
 import { Pipeline } from "./strategy/pipeline.ts";
+import { PaperExecutor } from "./trading/paper-executor.ts";
+import { PositionManager } from "./trading/position-manager.ts";
 
 const log = createLogger("core");
 const db = createDb(process.env.DATABASE_URL, { max: 8 });
@@ -54,7 +56,10 @@ const kill = new KillSwitch(configs.trade.data.kill_switch.file_flag);
 // Catatan: perubahan sources.yaml baru berlaku setelah restart core.
 const recorder = startRecorder(bus, db, log);
 const src = configs.sources.data;
-const dex = new DexScreenerClient(src.dexscreener.base_url, src.dexscreener.rpm, recorder.recordUsage);
+const dex = new DexScreenerClient(src.dexscreener.base_url, src.dexscreener.rpm, recorder.recordUsage, {
+  url: process.env.DEXSCREENER_PROXY_URL || undefined,
+  mode: src.dexscreener.proxy_mode,
+});
 const tracker = new MarketTracker(src.tracker, dex, bus, db, log);
 const pump = src.pumpportal.enabled ? startPumpPortal(src.pumpportal, bus, log) : null;
 const dexFeeds = src.dexscreener.enabled ? startDexScreenerFeeds(src.dexscreener, dex, bus, log) : null;
@@ -72,6 +77,36 @@ const pipeline = new Pipeline({
   strategy: () => configs.strategy.data,
   strategyVersion: () => configVersion.strategy,
 });
+// ---- Fase 3: paper trading (risk → paper executor → exit engine) ----
+const symbols = new Map<string, string>();
+bus.on("TokenTriggered", (e) => {
+  if (e.meta?.symbol) symbols.set(e.mint, e.meta.symbol);
+  if (symbols.size > 20_000) symbols.delete(symbols.keys().next().value!);
+});
+const executor = new PaperExecutor(
+  () => configs.trade.data,
+  rpc,
+  (mint) => {
+    const pair = tracker.latestPair(mint, 120_000);
+    const priceSol = Number(pair?.priceNative);
+    if (!pair || !(priceSol > 0)) return null;
+    return { priceSol, liquidityUsd: pair.liquidity?.usd ?? null, priceUsd: Number(pair.priceUsd) || null };
+  },
+  recorder.recordUsage,
+);
+const positions = new PositionManager({
+  bus,
+  db,
+  log,
+  tracker,
+  executor,
+  trade: () => configs.trade.data,
+  strategy: () => configs.strategy.data,
+  strategyVersion: () => configVersion.strategy,
+  killed: () => kill.active,
+  symbolOf: (mint) => symbols.get(mint) ?? null,
+});
+
 if (src.gmgn.enabled) log.warn("collector GMGN belum diimplementasi (butuh API key) — dilewati");
 if (src.meteora.enabled) log.warn("collector Meteora belum diimplementasi — dilewati");
 
@@ -104,22 +139,58 @@ const control = startControlServer({
             lastMessageAgoSec: Math.round((Date.now() - pump.lastMessageAt) / 1000),
           }
         : "off",
-      dexscreener: dexFeeds ? "on" : "off",
+      dexscreener: dexFeeds ? { route: dex.route, pausedForSec: dex.pausedForSec, ...dex.stats } : "off",
     },
     tracker: { activeTokens: tracker.activeTokens, activePaths: tracker.activePaths, ...tracker.stats },
     triggers: triggerCounts,
     pipeline: pipeline.stats,
     rpc: rpc.hosts(),
     journal: recorder.stats(),
+    trading: positions.summary(),
   }),
   onControl: async (action, actor) => {
     await db`INSERT INTO control_events (actor, action) VALUES (${actor}, ${action})`;
     if (action === "kill" || action === "pause") kill.engage(`${action} oleh ${actor}`);
     if (action === "resume") kill.release();
-    // "panic" (jual semua) diimplementasi bersama position manager di Fase 3
+    if (action === "panic") {
+      kill.engage(`panic oleh ${actor}`);
+      await positions.panicAll();
+    }
     bus.emit({ t: "Control", action, actor });
   },
+  onClosePosition: async (id, actor) => {
+    await db`INSERT INTO control_events (actor, action, payload) VALUES (${actor}, 'close_position', ${{ id }})`;
+    return positions.closeManual(id, "manual");
+  },
+  positions: () =>
+    positions.openPositions.map((p) => ({
+      id: p.id,
+      mint: p.mint,
+      symbol: p.symbol,
+      profile: p.profile,
+      mode: p.mode,
+      sizeSol: p.sizeSol,
+      costSol: p.costSol,
+      tokensHeld: p.tokensHeld,
+      tokensInitial: p.tokensInitial,
+      proceedsSol: p.proceedsSol,
+      openedAt: p.openedAt,
+      lastPrice: p.lastPrice,
+      entryPrice: p.state.entryPrice,
+      peakPnlPct: p.state.peakPnlPct,
+      soldFrac: p.state.soldFrac,
+      ladderDone: p.state.ladderDone,
+      breakEvenArmed: p.state.breakEvenArmed,
+      pnlPct:
+        p.lastPrice !== null
+          ? ((p.lastPrice * (1 - executor.estimateExitCostPct(p.mint, p.tokensHeld) / 100)) /
+              p.state.entryPrice -
+              1) *
+            100
+          : null,
+    })),
 });
+await positions.restore();
 
 // ---- heartbeat → system_events tiap 60 dtk ----
 let lastBeat = performance.now();
@@ -145,7 +216,7 @@ const heartbeat = setInterval(async () => {
 }, 60_000);
 
 await db`INSERT INTO system_events (level, service, kind, message) VALUES ('info', 'core', 'start', 'core started')`;
-log.info({ port: control.port }, "memebot-core siap (Fase 1: observasi, tanpa trading)");
+log.info({ port: control.port }, "memebot-core siap (Fase 3: paper trading, tanpa uang asli)");
 
 // ---- shutdown rapi ----
 let stopping = false;
@@ -159,6 +230,7 @@ async function shutdown(signal: string) {
   control.stop();
   pump?.stop();
   dexFeeds?.stop();
+  positions.stop();
   await pipeline.stop();
   await tracker.stop();
   await recorder.stop();

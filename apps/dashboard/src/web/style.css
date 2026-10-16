@@ -251,3 +251,39 @@ pre.features {
   font-size: 12px;
   max-height: 320px;
 }
+.btn {
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.btn.small {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.btn.warn {
+  border-color: #e0a84a;
+  color: #e0a84a;
+}
+.btn.danger {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+#toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  gap: 8px;
+  z-index: 10;
+}
+.toast {
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  max-width: 320px;
+}

@@ -289,6 +289,8 @@ export const SourcesConfig = z
           .object({ profiles: num.positive(), boosts_latest: num.positive(), boosts_top: num.positive() })
           .strict(),
         rpm: z.object({ profiles: num.positive(), pairs: num.positive() }).strict(),
+        /** proxy URL dari env DEXSCREENER_PROXY_URL; mode menentukan kapan dipakai */
+        proxy_mode: z.enum(["off", "fallback", "always"]).default("fallback"),
       })
       .strict(),
     gmgn: z

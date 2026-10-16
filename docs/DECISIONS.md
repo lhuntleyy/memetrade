@@ -62,3 +62,12 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 - Mint/freeze authority & extension Token-2022 dibaca dari `getAccountInfo` encoding `jsonParsed` (RPC yang parse TLV) — tanpa parser biner sendiri. Extension tak dikenal = fail.
 - RPC publik dipakai sementara (set `SOLANA_RPC_URL` ke Helius begitu ada key). Gagal RPC = fail (bukan pass).
 - Pump.fun sekarang memakai Token-2022 dengan `metadataPointer` + `tokenMetadata` → dua extension ini dianggap aman.
+
+### ADR-014 · 2026-10-17 · accepted — Proxy DexScreener mode fallback
+- Proxy residential hanya dipakai saat IP VPS kena 429 (jeda direct 30 dtk→5 menit), bukan untuk semua request, karena biaya per GB (perkiraan mode always ±57 GB/bulan).
+
+### ADR-015 · 2026-10-17 · accepted — Paper trading pakai quote Jupiter asli + PnL executable
+- Fill paper = quote Jupiter Swap V2 untuk jumlah persis setelah delay latency; fallback estimasi constant product dari likuiditas DexScreener + fee konservatif (pool 1%, platform 0.5%).
+- Harga entry efektif termasuk biaya jaringan & rent ATA; PnL monitoring = harga × (1 − estimasi biaya exit). Trailing/TP dalam poin persen.
+- Entry ditolak kalau impact > `entry.max_price_impact_pct` (quote token baru bisa liar).
+- Mode live sengaja ditolak sampai Fase 5.

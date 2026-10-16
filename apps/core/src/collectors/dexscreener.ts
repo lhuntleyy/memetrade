@@ -37,43 +37,90 @@ export class DexScreenerClient {
   private listLimiter: RateLimiter;
   private pairLimiter: RateLimiter;
 
+  /**
+   * proxy: `off` = selalu langsung; `fallback` = langsung, pindah ke proxy selama IP VPS kena 429;
+   * `always` = selalu lewat proxy (boros bandwidth — proxy residential dibayar per GB).
+   */
   constructor(
     private readonly baseUrl: string,
     rpm: { profiles: number; pairs: number },
     private readonly onUsage: ApiUsageFn = () => {},
+    private readonly proxy: { url?: string; mode: "off" | "fallback" | "always" } = { mode: "off" },
   ) {
     // sisakan ~10% headroom dari limit resmi
     this.listLimiter = new RateLimiter(Math.floor(rpm.profiles * 0.9));
     this.pairLimiter = new RateLimiter(Math.floor(rpm.pairs * 0.9));
   }
 
-  /** jeda global setelah 429 (semua endpoint), naik eksponensial sampai 5 menit */
-  private pausedUntil = 0;
-  private strikes = 0;
+  /** jalur langsung (IP VPS) dijeda sampai waktu ini setelah 429 */
+  private directPausedUntil = 0;
+  /** jalur proxy dijeda sampai waktu ini setelah 429 / error */
+  private proxyPausedUntil = 0;
+  private directStrikes = 0;
+  private proxyStrikes = 0;
+  stats = { direct: 0, proxy: 0, direct429: 0, proxy429: 0 };
 
+  private get proxyUsable() {
+    return Boolean(this.proxy.url) && this.proxy.mode !== "off";
+  }
+
+  /** Sisa jeda (detik) sampai ADA jalur yang bisa dipakai. */
   get pausedForSec(): number {
-    return Math.max(0, Math.ceil((this.pausedUntil - Date.now()) / 1000));
+    const now = Date.now();
+    const direct = this.proxy.mode === "always" ? Number.POSITIVE_INFINITY : this.directPausedUntil;
+    const proxy = this.proxyUsable ? this.proxyPausedUntil : Number.POSITIVE_INFINITY;
+    const until = Math.min(direct, proxy);
+    return Math.max(0, Math.ceil((until - now) / 1000));
+  }
+
+  get route(): "direct" | "proxy" | "paused" {
+    const now = Date.now();
+    if (this.proxy.mode !== "always" && now >= this.directPausedUntil) return "direct";
+    if (this.proxyUsable && now >= this.proxyPausedUntil) return "proxy";
+    return "paused";
   }
 
   private async get<T>(path: string, limiter: RateLimiter, endpoint: string): Promise<T> {
-    if (Date.now() < this.pausedUntil)
+    const route = this.route;
+    if (route === "paused")
       throw new Error(`dexscreener ${endpoint} dijeda ${this.pausedForSec} dtk (rate limit)`);
-    await limiter.take();
+    if (route === "direct") await limiter.take(); // via proxy IP berganti, limiter lokal tidak relevan
     const t0 = performance.now();
     let status = 0;
     try {
-      const res = await fetch(`${this.baseUrl}${path}`, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        signal: AbortSignal.timeout(route === "proxy" ? 15_000 : 8000),
+        ...(route === "proxy" ? { proxy: this.proxy.url } : {}),
+      });
       status = res.status;
+      this.stats[route]++;
       if (res.status === 429) {
-        this.strikes++;
-        this.pausedUntil = Date.now() + Math.min(300_000, 30_000 * 2 ** (this.strikes - 1));
-        throw new Error(`dexscreener ${endpoint} HTTP 429 — jeda ${this.pausedForSec} dtk`);
+        if (route === "direct") {
+          this.directStrikes++;
+          this.stats.direct429++;
+          this.directPausedUntil = Date.now() + Math.min(300_000, 30_000 * 2 ** (this.directStrikes - 1));
+        } else {
+          this.proxyStrikes++;
+          this.stats.proxy429++;
+          this.proxyPausedUntil = Date.now() + Math.min(120_000, 5_000 * 2 ** (this.proxyStrikes - 1));
+        }
+        throw new Error(`dexscreener ${endpoint} HTTP 429 via ${route}`);
       }
-      if (!res.ok) throw new Error(`dexscreener ${endpoint} HTTP ${res.status}`);
-      this.strikes = Math.max(0, this.strikes - 1);
+      if (!res.ok) throw new Error(`dexscreener ${endpoint} HTTP ${res.status} via ${route}`);
+      if (route === "direct") this.directStrikes = Math.max(0, this.directStrikes - 1);
+      else this.proxyStrikes = Math.max(0, this.proxyStrikes - 1);
       return (await res.json()) as T;
+    } catch (err) {
+      // proxy mati / timeout → istirahatkan proxy sebentar
+      if (route === "proxy" && status === 0) this.proxyPausedUntil = Date.now() + 30_000;
+      throw err;
     } finally {
-      this.onUsage("dexscreener", endpoint, status, Math.round(performance.now() - t0));
+      this.onUsage(
+        route === "proxy" ? "dexscreener_proxy" : "dexscreener",
+        endpoint,
+        status,
+        Math.round(performance.now() - t0),
+      );
     }
   }
 
