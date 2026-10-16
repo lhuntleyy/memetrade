@@ -1,0 +1,3 @@
+[install]
+# mirror Tencent (~/.npmrc) kadang telat sinkron paket baru
+registry = "https://registry.npmjs.org"

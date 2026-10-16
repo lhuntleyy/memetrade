@@ -1,0 +1,27 @@
+# Collector (docs/02-research.md §1). Fase 1.
+pumpportal:
+  enabled: true
+  ws_url: "wss://pumpportal.fun/api/data"   # WAJIB 1 koneksi saja
+  new_token: true
+  migration: true
+  token_trades: false        # metered 0.01 SOL / 10k event, butuh API key + wallet
+
+dexscreener:
+  enabled: true
+  base_url: "https://api.dexscreener.com"
+  poll_sec: { profiles: 15, boosts_latest: 15, boosts_top: 60 }
+  rpm: { profiles: 60, pairs: 300 }
+
+gmgn:
+  enabled: false             # butuh GMGN_API_KEY + whitelist IP VPS
+  poll_sec: 20
+  feeds: [trending, trenches, hot]
+
+meteora:
+  enabled: false
+  poll_sec: 30
+
+tracker:
+  track_minutes: 90
+  max_concurrent_tokens: 300
+  tick_flush_ms: 1000

@@ -1,0 +1,13 @@
+# LLM worker (docs/08-llm.md). Fase 4. Model tagger/parser bisa diganti ke claude-haiku-5-5 kalau mau hemat.
+enabled: false
+daily_budget_usd: 3
+models:
+  default: claude-opus-5-5
+  tagger: claude-opus-5-5
+  parser: claude-opus-5-5
+  review: claude-opus-5-5
+tasks:
+  narrative_tagger: true
+  telegram_parser: false
+  thesis_check: false
+  daily_review: true

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(/etc/memebot/**)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Edit(/etc/memebot/**)",
+      "Bash(cat /etc/memebot/*)",
+      "Bash(sudo cat /etc/memebot/*)",
+      "Bash(cat .env*)"
+    ],
+    "allow": [
+      "Read(./.env.example)"
+    ]
+  }
+}
