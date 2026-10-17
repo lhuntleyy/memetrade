@@ -19,6 +19,7 @@
         <button type="button" data-tab="backtest">Backtest</button>
         <button type="button" data-tab="wallets">Wallet</button>
         <button type="button" data-tab="token">Token</button>
+        <button type="button" data-tab="config">Config</button>
       </nav>
       <span id="ws-dot" title="stream real-time">○</span>
       <form method="post" action="/logout"><button type="submit" class="link">Keluar</button></form>
@@ -166,6 +167,7 @@
           TP <input id="bt-tps" value="15,20,25,30,40,50" size="14" />
           SL <input id="bt-sls" value="10,15,20,30" size="10" />
           Biaya entry/exit % <input id="bt-cost" value="1.5" size="3" />
+          Walk-forward fold <input id="bt-folds" value="4" size="2" />
           <button type="submit">Jalankan</button>
         </form>
         <p class="muted">Replay exit engine yang sama dengan paper trading di atas tick rekaman (sudah difilter spike). Entry = tick pertama ±1 dtk setelah keputusan. Sel = expectancy %/trade setelah biaya (win rate).</p>
@@ -199,6 +201,36 @@
           </table>
         </div>
         <div id="wallet-detail"></div>
+      </section>
+
+      <section id="tab-config" class="tab">
+        <div class="toolbar">
+          File
+          <select id="cfg-kind">
+            <option value="strategy">strategy.yaml</option>
+            <option value="trade">trade.yaml</option>
+            <option value="sources">sources.yaml</option>
+            <option value="llm">llm.yaml</option>
+          </select>
+          <span id="cfg-version" class="muted"></span>
+          <button type="button" class="btn" id="cfg-reload">Muat ulang</button>
+        </div>
+        <p class="muted">Setiap simpan = versi baru (bisa di-rollback). Config divalidasi dulu; mode <b>live</b> ditolak dari dashboard. strategy/trade berlaku langsung (hot reload); sources perlu restart core.</p>
+        <textarea id="cfg-yaml" spellcheck="false"></textarea>
+        <div class="toolbar">
+          <input id="cfg-note" placeholder="Catatan perubahan (mis. naikkan SL ke -20)" size="50" maxlength="200" />
+          <button type="button" class="btn" id="cfg-validate">Validasi &amp; lihat diff</button>
+          <button type="button" class="btn warn" id="cfg-save">Simpan</button>
+        </div>
+        <div id="cfg-result"></div>
+        <h2>Riwayat versi</h2>
+        <div class="scroll">
+          <table id="cfg-versions">
+            <thead><tr><th>Versi</th><th>Waktu</th><th>Oleh / catatan</th><th>Hash</th><th>Status</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="cfg-view"></div>
       </section>
 
       <section id="tab-token" class="tab">

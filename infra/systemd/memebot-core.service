@@ -11,7 +11,7 @@ WorkingDirectory=/opt/memebot/app
 EnvironmentFile=/etc/memebot/secrets.env
 Environment=NODE_ENV=production
 Environment=BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
-Environment=MEMEBOT_CONFIG_DIR=/opt/memebot/app/config
+Environment=MEMEBOT_CONFIG_DIR=/var/lib/memebot/config
 ExecStart=/opt/memebot/.bun/bin/bun run apps/core/src/main.ts
 Restart=always
 RestartSec=3

@@ -14,6 +14,8 @@ interface Options {
   onClosePosition?: (id: number, actor: string) => Promise<boolean>;
   /** tambah/lepas wallet dari watchlist */
   onWatchWallet?: (address: string, active: boolean, actor: string) => Promise<boolean>;
+  /** rute tambahan (mis. administrasi config); null = bukan rutenya */
+  extraRoutes?: (req: Request, url: URL, actor: string) => Promise<Response | null>;
   /** daftar posisi terbuka live (untuk dashboard) */
   positions?: () => unknown[];
 }
@@ -44,6 +46,10 @@ export function startControlServer(o: Options) {
       }
       if (url.pathname === "/status" && req.method === "GET") return Response.json(o.status());
 
+      if (o.extraRoutes) {
+        const r = await o.extraRoutes(req, url, req.headers.get("x-actor") ?? "unknown");
+        if (r) return r;
+      }
       if (url.pathname === "/positions" && req.method === "GET") return Response.json(o.positions?.() ?? []);
       const wm = url.pathname.match(/^\/wallets\/([1-9A-HJ-NP-Za-km-z]{32,44})\/(watch|unwatch)$/);
       if (wm && req.method === "POST" && o.onWatchWallet) {

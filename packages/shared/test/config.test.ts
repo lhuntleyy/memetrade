@@ -80,3 +80,33 @@ describe("effectiveMode", () => {
     expect(effectiveMode("live", "off")).toBe("off");
   });
 });
+
+describe("watchConfig", () => {
+  test("tetap mendeteksi perubahan setelah beberapa penulisan atomik (rename)", async () => {
+    const { mkdtemp, writeFile, rename, readFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { watchConfig } = await import("../src/index.ts");
+    const dir = await mkdtemp(join(tmpdir(), "cfg-"));
+    const src = await readFile(new URL("../../../config/llm.yaml", import.meta.url), "utf8");
+    const path = join(dir, "llm.yaml");
+    await writeFile(path, src);
+    const cfg = await loadConfig("llm", dir);
+    const seen: number[] = [];
+    const stop = watchConfig(
+      cfg,
+      (n) => void seen.push(n.data.daily_budget_usd),
+      () => {},
+      50,
+    );
+    const atomic = async (budget: number) => {
+      await writeFile(`${path}.tmp`, src.replace(/daily_budget_usd: .*/, `daily_budget_usd: ${budget}`));
+      await rename(`${path}.tmp`, path);
+      await Bun.sleep(250);
+    };
+    await atomic(7);
+    await atomic(9);
+    stop();
+    expect(seen).toEqual([7, 9]);
+  });
+});

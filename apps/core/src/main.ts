@@ -12,6 +12,7 @@ import {
 import { SolanaRpc } from "@memebot/solana";
 import { DexScreenerClient, startDexScreenerFeeds } from "./collectors/dexscreener.ts";
 import { startPumpPortal } from "./collectors/pumpportal.ts";
+import { ConfigAdmin } from "./config-admin.ts";
 import { startControlServer } from "./control.ts";
 import { GmgnClient } from "./enrich/gmgn.ts";
 import { JupiterTokens } from "./enrich/jupiter.ts";
@@ -167,6 +168,7 @@ bus.on("TokenTriggered", (e) => {
 
 // ---- control API lokal (dashboard ambil status & event dari sini) ----
 const startedAt = Date.now();
+const configAdmin = new ConfigAdmin(db, (kind) => configs[kind] as LoadedConfig<ConfigKind>, log);
 const control = startControlServer({
   port: Number(process.env.CORE_CONTROL_PORT ?? 7071),
   secret: process.env.CONTROL_SECRET,
@@ -211,6 +213,7 @@ const control = startControlServer({
     }
     bus.emit({ t: "Control", action, actor });
   },
+  extraRoutes: (req, url, actor) => configAdmin.handle(req, url, actor),
   onWatchWallet: async (address, active, actor) => {
     if (!wallets) return false;
     await db`INSERT INTO control_events (actor, action, payload) VALUES (${actor}, 'watch_wallet', ${{ address, active }})`;

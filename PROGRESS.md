@@ -85,8 +85,8 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 
 ## Fase 4 — Research loop & LLM
 - [x] P4-01 Replay: `research/replay.ts` (exit engine yang sama, entry tick +latency, biaya tetap) + CLI `replay` + tab Backtest
-- [~] P4-02 Sweep TP × SL ✅ (CLI & dashboard); walk-forward belum
-- [~] P4-03 Dashboard Backtest ✅; config editor/rollback belum
+- [x] P4-02 Sweep TP × SL + walk-forward anchored (CLI `replay` & tab Backtest)
+- [x] P4-03 Dashboard Backtest + tab Config (editor YAML, validasi + diff, versi, rollback, guard mode live)
 - [!] P4-04 LLM worker + narrative tagger — butuh ANTHROPIC_API_KEY
 - [ ] P4-05 Daily review + proposal config → replay → approve
 - [ ] P4-06 Dashboard: AI Insights
@@ -211,3 +211,11 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - Setelah data bertambah: 769 wallet sudah punya skor, 1 wallet ≥ 60 (83,7) otomatis masuk watchlist.
 - 74 test pass, tsc & biome bersih.
 - Live: poll pertama feed GMGN → 17 pembelian dari 14 wallet bertag, 3 sinyal konfluensi (salah satunya melibatkan wallet berskor 83,7 dari data kita); semua lolos security tapi ditolak filter `smart_money` (likuiditas/mcap/holders kurang). Beban GMGN naik (feed + aktivitas + scan + pipeline) → sesekali 429, ditangani jeda otomatis.
+
+### 2026-10-17 (lanjutan) — walk-forward & editor config
+- Walk-forward anchored (`walkForward` di `research/replay.ts`, dites): kandidat dibagi menurut waktu jadi folds+1 segmen; tiap fold pilih TP×SL terbaik di data latih (min trade) lalu uji di segmen berikutnya; gabungan out-of-sample dibandingkan dengan exit config sekarang + stabilitas parameter. Ada di CLI `replay` dan tab Backtest (input jumlah fold).
+- **Hasil walk-forward 48 jam (semua token yang dievaluasi, biaya 1,5%+1,5%):** OOS parameter hasil optimasi −4,23%/trade (262 trade), OOS config sekarang −4,55%/trade; parameter terbaik relatif stabil (2 kombinasi berbeda dari 4 fold, mayoritas TP15/SL30). Kesimpulan: optimasi exit saja tidak menciptakan edge — perlu filter/sumber sinyal yang lebih baik.
+- Config live dipindah ke `/var/lib/memebot/config` (unit systemd `MEMEBOT_CONFIG_DIR`), disalin dari repo sekali. File `config/*.yaml` di repo = default/template; deploy (rsync) tidak lagi menimpa config live.
+- Editor config: core `config-admin.ts` (GET/validate/save/versions/rollback lewat control API, tulis atomik, versi + diff di `config_versions`, **guard: mode live ditolak** kecuali env `MEMEBOT_ALLOW_LIVE_CONFIG=1`); dashboard tab **Config** (editor YAML, Validasi & diff berwarna, Simpan dengan catatan, riwayat versi, Lihat, Rollback).
+- Bug ditemukan saat uji: watcher file putus setelah penulisan atomik (inode baru) → rollback kedua tidak dimuat core. Diperbaiki: watcher memantau direktori (+ test rename berulang). Uji e2e via HTTPS publik: validasi/diff, config invalid ditolak, mode live 422, simpan → v19 aktif & dimuat, rollback → v15 aktif & dimuat (isi sama persis).
+- 79 test pass, tsc & biome bersih.

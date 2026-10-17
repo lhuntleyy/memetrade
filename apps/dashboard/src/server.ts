@@ -1,6 +1,6 @@
 import { createDb } from "@memebot/db";
 import { createLogger, loadConfig } from "@memebot/shared";
-import { loadReplayData, runReplay, sweepTpSl } from "../../core/src/research/replay.ts";
+import { loadReplayData, runReplay, sweepTpSl, walkForward } from "../../core/src/research/replay.ts";
 import { createAuth, LOGIN_PAGE } from "./auth.ts";
 import {
   closedPositions,
@@ -55,6 +55,28 @@ const coreStatus = () =>
   })
     .then((r) => (r.ok ? r.json() : { ok: false, http: r.status }))
     .catch(() => ({ ok: false }));
+
+/** Proxy generik ke core: isi parameter rute, teruskan method + body JSON, actor = dashboard:<ip>. */
+async function coreProxy(req: Request, template: string): Promise<Response> {
+  const params = (req as Request & { params: Record<string, string> }).params ?? {};
+  let path = template;
+  for (const [k, v] of Object.entries(params)) {
+    if (!/^[a-z0-9]+$/i.test(v)) return Response.json({ error: "parameter tidak valid" }, { status: 400 });
+    path = path.replace(`:${k}`, v);
+  }
+  const r = await fetch(`${coreUrl}${path}`, {
+    method: req.method,
+    headers: {
+      authorization: `Bearer ${secret}`,
+      "x-actor": `dashboard:${clientIp(req)}`,
+      "content-type": "application/json",
+    },
+    body: req.method === "POST" ? await req.text() : undefined,
+    signal: AbortSignal.timeout(15_000),
+  }).catch(() => null);
+  if (!r) return Response.json({ error: "core tidak bisa dihubungi" }, { status: 502 });
+  return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json" } });
+}
 
 /** Teruskan perintah ke control API core; actor = "dashboard:<ip>" (tercatat di control_events). */
 function coreCommand(path: string, req: Request) {
@@ -214,6 +236,19 @@ const server = Bun.serve({
       });
       const current = runReplay(data, exit, opts);
       const cells = sweepTpSl(data, exit, tps, sls, opts);
+      const folds = clampInt(u.searchParams.get("wf_folds"), 4, 0, 8);
+      const wf =
+        folds > 0
+          ? walkForward(
+              data,
+              exit,
+              tps,
+              sls,
+              opts,
+              folds,
+              clampInt(u.searchParams.get("wf_min_trades"), 10, 1, 500),
+            )
+          : null;
       return Response.json({
         profile,
         exitRef: prof.exits.ref,
@@ -224,8 +259,18 @@ const server = Bun.serve({
         tps,
         sls,
         cells: cells.map((c) => ({ tp: c.tp, sl: c.sl, ...c.m })),
+        walkForward: wf,
       });
     }),
+    // administrasi config → diteruskan ke control API core (validasi, versi, guard live ada di core)
+    "/api/config/:kind": {
+      GET: guard((req) => coreProxy(req, "/config/:kind")),
+      POST: guard((req) => coreProxy(req, "/config/:kind")),
+    },
+    "/api/config/:kind/validate": { POST: guard((req) => coreProxy(req, "/config/:kind/validate")) },
+    "/api/config/:kind/versions": guard((req) => coreProxy(req, "/config/:kind/versions")),
+    "/api/config/:kind/versions/:id": guard((req) => coreProxy(req, "/config/:kind/versions/:id")),
+    "/api/config/:kind/rollback/:id": { POST: guard((req) => coreProxy(req, "/config/:kind/rollback/:id")) },
     "/api/system/events": guard(async () =>
       Response.json(
         await db`SELECT ts, level, service, kind, message, data FROM system_events

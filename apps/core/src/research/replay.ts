@@ -286,3 +286,98 @@ export async function loadRefilteredData(
   }
   return { evaluated: rows.length, candidates, ticks, rejected };
 }
+
+export interface WalkForwardFold {
+  fold: number;
+  trainFrom: number;
+  trainTo: number;
+  testFrom: number;
+  testTo: number;
+  /** parameter terbaik di data latih (null kalau trade latih kurang) */
+  best: { tp: number; sl: number; trainExpectancyPct: number | null; trainTrades: number } | null;
+  /** hasil parameter terbaik di data uji (out-of-sample) */
+  test: ReplayMetrics | null;
+  /** hasil exit config sekarang di data uji yang sama (pembanding) */
+  testCurrent: ReplayMetrics;
+}
+
+export interface WalkForwardResult {
+  folds: WalkForwardFold[];
+  /** gabungan semua trade out-of-sample dengan parameter hasil optimasi */
+  oos: ReplayMetrics;
+  /** gabungan out-of-sample exit config sekarang */
+  oosCurrent: ReplayMetrics;
+  /** seberapa sering parameter terbaik berubah antar fold (stabilitas) */
+  distinctBest: number;
+}
+
+/**
+ * Walk-forward (anchored): kandidat diurutkan menurut waktu lalu dibagi `folds + 1` segmen sama besar.
+ * Fold i: latih di segmen 0..i-1 (expanding), pilih TP×SL dengan expectancy tertinggi (min `minTrades` trade),
+ * uji di segmen i. Hasil out-of-sample digabung → perkiraan performa yang lebih jujur daripada sweep biasa.
+ */
+export function walkForward(
+  data: { candidates: ReplayCandidate[]; ticks: Map<string, Tick[]> },
+  base: ExitConfig,
+  tps: number[],
+  sls: number[],
+  options: ReplayOptions,
+  folds = 4,
+  minTrades = 10,
+): WalkForwardResult {
+  const sorted = [...data.candidates].sort((a, b) => a.ts - b.ts);
+  const segSize = Math.max(1, Math.floor(sorted.length / (folds + 1)));
+  const seg = (i: number) => sorted.slice(i * segSize, i === folds ? sorted.length : (i + 1) * segSize);
+  const out: WalkForwardFold[] = [];
+  const oosTrades: ReplayTrade[] = [];
+  const oosCurrentTrades: ReplayTrade[] = [];
+  let oosCandidates = 0;
+  for (let i = 1; i <= folds; i++) {
+    const train = sorted.slice(0, i * segSize);
+    const test = seg(i);
+    if (train.length === 0 || test.length === 0) continue;
+    const trainData = { candidates: train, ticks: data.ticks };
+    const testData = { candidates: test, ticks: data.ticks };
+    const cells = sweepTpSl(trainData, base, tps, sls, options).filter(
+      (c) => c.m.trades >= minTrades && c.m.expectancyPct !== null,
+    );
+    const bestCell = cells.sort((a, b) => (b.m.expectancyPct ?? -1e9) - (a.m.expectancyPct ?? -1e9))[0];
+    const current = runReplay(testData, base, options);
+    oosCurrentTrades.push(...current.trades);
+    oosCandidates += test.length;
+    let testM: ReplayMetrics | null = null;
+    if (bestCell) {
+      const exit = ExitConfig.parse({
+        ...base,
+        hard_sl_pct: -Math.abs(bestCell.sl),
+        take_profit_ladder: [{ at_pct: bestCell.tp, sell_pct: 100 }],
+      });
+      const r = runReplay(testData, exit, options);
+      testM = r.metrics;
+      oosTrades.push(...r.trades);
+    }
+    out.push({
+      fold: i,
+      trainFrom: train[0]!.ts,
+      trainTo: train[train.length - 1]!.ts,
+      testFrom: test[0]!.ts,
+      testTo: test[test.length - 1]!.ts,
+      best: bestCell
+        ? {
+            tp: bestCell.tp,
+            sl: bestCell.sl,
+            trainExpectancyPct: bestCell.m.expectancyPct,
+            trainTrades: bestCell.m.trades,
+          }
+        : null,
+      test: testM,
+      testCurrent: current.metrics,
+    });
+  }
+  return {
+    folds: out,
+    oos: metrics(oosTrades, oosCandidates),
+    oosCurrent: metrics(oosCurrentTrades, oosCandidates),
+    distinctBest: new Set(out.filter((f) => f.best).map((f) => `${f.best!.tp}/${f.best!.sl}`)).size,
+  };
+}

@@ -94,3 +94,10 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 
 ### ADR-022 · 2026-10-17 · accepted — Smart money = skor sendiri + wallet bertag GMGN
 - Skor wallet deterministik dari data sendiri butuh berhari-hari untuk terbentuk, jadi wallet bertag GMGN (smart_degen/KOL) dari feed real-time ikut dihitung sebagai "wallet bagus" untuk konfluensi. Konfluensi = ≥2 wallet bagus berbeda membeli token yang sama dalam 30 menit; tetap lewat security + filter sebelum entry paper.
+
+### ADR-023 · 2026-10-17 · accepted — Config live di /var/lib/memebot/config, diedit lewat core
+- Core (bukan dashboard) yang menulis config: validasi, guard live, versi, diff, tulis atomik. Dashboard hanya proxy ber-login.
+- Config live terpisah dari kode supaya deploy tidak menimpa hasil edit; repo `config/` = default. Menerapkan default repo ke live: lewat editor dashboard, atau `sudo install -m 640 -o memebot -g memebot config/<file>.yaml /var/lib/memebot/config/` (watcher mencatat versi baru).
+
+### ADR-024 · 2026-10-17 · accepted — Walk-forward sebagai syarat sebelum mengubah exit
+- Perubahan TP/SL hanya diterapkan kalau unggul di out-of-sample walk-forward, bukan sekadar sel terbaik di sweep.

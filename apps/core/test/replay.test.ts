@@ -59,3 +59,38 @@ test("metrik & sweep", () => {
   expect(cells.find((c) => c.tp === 25)?.m.expectancyPct).toBeCloseTo(26); // TP 25 kena di 1.26
   expect(cells.find((c) => c.tp === 30)?.m.reasons).toEqual({ trailing: 1 }); // trailing (peak 26, turun) — tidak sampai TP 30
 });
+
+test("walk-forward: parameter dipilih dari data latih, diuji di segmen berikutnya", async () => {
+  const { walkForward } = await import("../src/research/replay.ts");
+  // 10 kandidat berurutan; tiap token naik ke +40% lalu jatuh ke -30% → TP rendah menang, TP 50 tidak pernah kena
+  const ticks = new Map<string, { ts: number; price: number }[]>();
+  const candidates = Array.from({ length: 10 }, (_, i) => {
+    const mint = `M${i}`;
+    const t0 = i * 100_000;
+    ticks.set(mint, [
+      { ts: t0 + 2000, price: 1 },
+      { ts: t0 + 7000, price: 1.4 },
+      { ts: t0 + 12_000, price: 0.7 },
+    ]);
+    return { mint, profile: "p", ts: t0 };
+  });
+  const base = ExitConfig.parse({
+    hard_sl_pct: -15,
+    take_profit_ladder: [{ at_pct: 50, sell_pct: 100 }],
+    max_hold_sec: 600,
+  });
+  const wf = walkForward(
+    { candidates, ticks },
+    base,
+    [20, 50],
+    [10],
+    { latencySec: 1, entryCostPct: 0, exitCostPct: 0 },
+    4,
+    1,
+  );
+  expect(wf.folds.length).toBe(4);
+  expect(wf.folds.every((f) => f.best?.tp === 20)).toBe(true);
+  expect(wf.oos.expectancyPct).toBeCloseTo(40); // TP 20 terlewati, tick berikutnya +40 → jual di +40
+  expect(wf.oosCurrent.reasons).toEqual({ hard_sl: 8 }); // config sekarang (TP 50) kena SL
+  expect(wf.distinctBest).toBe(1);
+});

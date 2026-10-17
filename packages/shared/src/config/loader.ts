@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { parse } from "yaml";
 import type { z } from "zod";
 import { type ConfigKind, type ConfigOf, configSchemas } from "./schema.ts";
@@ -60,7 +60,7 @@ export function defaultConfigDir(): string {
 }
 
 /**
- * Pantau file config. Callback hanya dipanggil kalau config baru VALID dan isinya berubah;
+ * Pantau file config (lewat direktorinya, tahan terhadap penulisan atomik). Callback hanya dipanggil kalau config baru VALID dan isinya berubah;
  * config invalid dilaporkan lewat onError dan config lama tetap dipakai.
  */
 export function watchConfig<K extends ConfigKind>(
@@ -71,7 +71,10 @@ export function watchConfig<K extends ConfigKind>(
 ): () => void {
   let timer: Timer | undefined;
   let last = current.hash;
-  const watcher = watch(current.path, () => {
+  // pantau DIREKTORI, bukan file: penulisan atomik (tmp + rename) mengganti inode dan memutus watcher file
+  const file = basename(current.path);
+  const watcher = watch(dirname(current.path), (_event, name) => {
+    if (name !== null && name !== file) return;
     clearTimeout(timer);
     timer = setTimeout(async () => {
       try {

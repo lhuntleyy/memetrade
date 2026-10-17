@@ -583,6 +583,7 @@ $("#bt-form").addEventListener("submit", async (ev) => {
     sls: $<HTMLInputElement>("#bt-sls").value,
     entry_cost: cost,
     exit_cost: cost,
+    wf_folds: $<HTMLInputElement>("#bt-folds").value,
   });
   $("#bt-result").innerHTML = `<p class="muted">Menghitung…</p>`;
   const r = await getJson<{
@@ -592,6 +593,19 @@ $("#bt-form").addEventListener("submit", async (ev) => {
     tps: number[];
     sls: number[];
     cells: Row[];
+    walkForward: {
+      folds: {
+        fold: number;
+        testFrom: number;
+        testTo: number;
+        best: Row | null;
+        test: Row | null;
+        testCurrent: Row;
+      }[];
+      oos: Row;
+      oosCurrent: Row;
+      distinctBest: number;
+    } | null;
   }>(`/api/backtest?${q}`);
   if ((r as unknown as Row).error) {
     $("#bt-result").innerHTML = `<p class="bad">${esc((r as unknown as Row).error)}</p>`;
@@ -627,7 +641,178 @@ $("#bt-form").addEventListener("submit", async (ev) => {
     <div class="scroll"><table class="heat"><thead><tr><th>TP \\ SL</th>${r.sls.map((sl) => `<th>-${sl}%</th>`).join("")}</tr></thead><tbody>
     ${r.tps.map((tp) => `<tr><th>+${tp}%</th>${r.sls.map((sl) => cell(tp, sl)).join("")}</tr>`).join("")}
     </tbody></table></div>
-    <p class="muted">Kotak bergaris = expectancy terbaik. Hati-hati overfitting: pilih area yang konsisten hijau, bukan satu sel terbaik — dan butuh ratusan trade.</p>`;
+    <p class="muted">Kotak bergaris = expectancy terbaik. Hati-hati overfitting: pilih area yang konsisten hijau, bukan satu sel terbaik — dan butuh ratusan trade.</p>
+    ${walkForwardHtml(r.walkForward)}`;
+});
+
+// ---------- walk-forward ----------
+type WF = {
+  folds: {
+    fold: number;
+    testFrom: number;
+    testTo: number;
+    best: Row | null;
+    test: Row | null;
+    testCurrent: Row;
+  }[];
+  oos: Row;
+  oosCurrent: Row;
+  distinctBest: number;
+} | null;
+
+function walkForwardHtml(wf: WF) {
+  if (!wf) return "";
+  const m = (x: Row | null) =>
+    x
+      ? `${pct(x.expectancyPct)} <span class="muted">(${x.trades} trade, win ${x.winRate ?? "–"}%)</span>`
+      : `<span class="muted">–</span>`;
+  const verdict =
+    wf.oos.expectancyPct === null
+      ? "data kurang"
+      : Number(wf.oos.expectancyPct) > 0
+        ? "positif di data yang belum dilihat ✓"
+        : "negatif di data yang belum dilihat ✗";
+  return `<h2>Walk-forward (out-of-sample)</h2>
+    <div class="grid">
+      ${card(
+        "Parameter hasil optimasi (OOS)",
+        wf.oos.expectancyPct === null ? null : Number(wf.oos.expectancyPct) > 0,
+        [
+          ["expectancy / trade", wf.oos.expectancyPct !== null ? `${wf.oos.expectancyPct}%` : "–"],
+          ["median", wf.oos.medianPct !== null ? `${wf.oos.medianPct}%` : "–"],
+          ["trade", wf.oos.trades],
+          ["kesimpulan", verdict],
+        ],
+      )}
+      ${card(
+        "Exit config sekarang (OOS)",
+        wf.oosCurrent.expectancyPct === null ? null : Number(wf.oosCurrent.expectancyPct) > 0,
+        [
+          [
+            "expectancy / trade",
+            wf.oosCurrent.expectancyPct !== null ? `${wf.oosCurrent.expectancyPct}%` : "–",
+          ],
+          ["median", wf.oosCurrent.medianPct !== null ? `${wf.oosCurrent.medianPct}%` : "–"],
+          ["trade", wf.oosCurrent.trades],
+          ["stabilitas parameter", `${wf.distinctBest} kombinasi berbeda dari ${wf.folds.length} fold`],
+        ],
+      )}
+    </div>
+    <div class="scroll"><table><thead><tr><th>Fold</th><th>Periode uji (WIB)</th><th>Terbaik di latih</th><th>Hasil di uji</th><th>Config sekarang di uji</th></tr></thead><tbody>
+    ${wf.folds
+      .map(
+        (
+          f,
+        ) => `<tr><td>${f.fold}</td><td>${wibFull.format(new Date(f.testFrom))} – ${wib.format(new Date(f.testTo))}</td>
+        <td>${f.best ? `TP +${f.best.tp}% / SL −${f.best.sl}% <span class="muted">(latih ${pct(f.best.trainExpectancyPct)}, ${f.best.trainTrades} trade)</span>` : `<span class="muted">trade latih kurang</span>`}</td>
+        <td>${m(f.test)}</td><td>${m(f.testCurrent)}</td></tr>`,
+      )
+      .join("")}</tbody></table></div>
+    <p class="muted">Tiap fold: TP×SL terbaik dipilih dari data sebelumnya lalu diuji di periode berikutnya. Kalau OOS jauh lebih jelek dari sweep biasa → hasil sweep overfit. Parameter yang sering berubah antar fold = tidak stabil.</p>`;
+}
+
+// ---------- config editor ----------
+let cfgLoadedKind = "";
+
+function diffHtml(diff: string) {
+  if (!diff.trim()) return `<p class="muted">Tidak ada perubahan.</p>`;
+  return `<pre class="diff">${diff
+    .split("\n")
+    .map(
+      (l) => `<span class="${l.startsWith("+ ") ? "add" : l.startsWith("- ") ? "del" : ""}">${esc(l)}</span>`,
+    )
+    .join("\n")}</pre>`;
+}
+
+async function sendJson(url: string, body: unknown) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.status === 401) location.href = "/login";
+  return { status: r.status, body: (await r.json().catch(() => ({}))) as Row };
+}
+
+async function loadConfigTab(force = false) {
+  const kind = $<HTMLSelectElement>("#cfg-kind").value;
+  if (force || cfgLoadedKind !== kind) {
+    const c = await getJson<Row>(`/api/config/${kind}`);
+    $<HTMLTextAreaElement>("#cfg-yaml").value = String(c.yaml ?? "");
+    $("#cfg-version").textContent = c.version ? `aktif: v${c.version}` : "";
+    $("#cfg-result").innerHTML = "";
+    cfgLoadedKind = kind;
+  }
+  const versions = await getJson(`/api/config/${kind}/versions`);
+  $("#cfg-versions tbody").innerHTML = versions
+    .map(
+      (v) => `<tr><td>v${esc(v.id)}</td><td>${wibFull.format(new Date(String(v.created_at)))}</td>
+      <td>${esc(v.author)}${v.note ? ` — ${esc(v.note)}` : ""}</td><td><code>${esc(v.hash)}</code></td>
+      <td>${v.active ? '<span class="tag ok">aktif</span>' : ""}</td>
+      <td><button type="button" class="btn small" data-cfgview="${esc(v.id)}">Lihat</button>
+          ${v.active ? "" : `<button type="button" class="btn small warn" data-cfgrollback="${esc(v.id)}">Rollback</button>`}</td></tr>`,
+    )
+    .join("");
+}
+
+function showValidation(r: Row) {
+  const issues = (r.issues as string[]) ?? [];
+  const blocked = (r.blocked as string[]) ?? [];
+  let html = "";
+  if (issues.length)
+    html += `<div class="bad"><b>Tidak valid:</b><ul>${issues.map((i) => `<li><code>${esc(i)}</code></li>`).join("")}</ul></div>`;
+  if (blocked.length)
+    html += `<div class="bad"><b>Ditolak (mode live tidak boleh dari dashboard):</b> ${blocked.map((b) => `<code>${esc(b)}</code>`).join(", ")}</div>`;
+  if (!issues.length && !blocked.length)
+    html += `<p class="ok">Valid${r.changed ? "" : " — tidak ada perubahan"}.</p>`;
+  html += diffHtml(String(r.diff ?? ""));
+  $("#cfg-result").innerHTML = html;
+}
+
+$<HTMLSelectElement>("#cfg-kind").onchange = () => void loadConfigTab();
+$("#cfg-reload").addEventListener("click", () => void loadConfigTab(true));
+$("#cfg-validate").addEventListener("click", async () => {
+  const kind = $<HTMLSelectElement>("#cfg-kind").value;
+  const r = await sendJson(`/api/config/${kind}/validate`, {
+    yaml: $<HTMLTextAreaElement>("#cfg-yaml").value,
+  });
+  showValidation(r.body);
+});
+$("#cfg-save").addEventListener("click", async () => {
+  const kind = $<HTMLSelectElement>("#cfg-kind").value;
+  const yaml = $<HTMLTextAreaElement>("#cfg-yaml").value;
+  const check = await sendJson(`/api/config/${kind}/validate`, { yaml });
+  showValidation(check.body);
+  if (!check.body.ok || !check.body.changed) return;
+  if (!confirm(`Simpan ${kind}.yaml sebagai versi baru? Perubahan langsung dipakai bot.`)) return;
+  const r = await sendJson(`/api/config/${kind}`, { yaml, note: $<HTMLInputElement>("#cfg-note").value });
+  if (r.status === 200) {
+    toast(`${kind}.yaml disimpan (v${r.body.version})`);
+    $<HTMLInputElement>("#cfg-note").value = "";
+    await loadConfigTab(true);
+    showValidation(r.body);
+  } else showValidation(r.body);
+});
+document.addEventListener("click", async (ev) => {
+  const el = ev.target as HTMLElement;
+  const kind = $<HTMLSelectElement>("#cfg-kind").value;
+  const view = el.closest<HTMLElement>("[data-cfgview]")?.dataset.cfgview;
+  if (view) {
+    const v = await getJson<Row>(`/api/config/${kind}/versions/${view}`);
+    $("#cfg-view").innerHTML =
+      `<h2>Versi v${esc(v.id)} — ${esc(v.author)}${v.note ? ` (${esc(v.note)})` : ""}</h2>
+      ${v.diff ? `<h3 class="sub">Perubahan saat disimpan</h3>${diffHtml(String(v.diff))}` : ""}
+      <h3 class="sub">Isi lengkap</h3><pre class="features">${esc(v.yaml)}</pre>`;
+    return;
+  }
+  const rb = el.closest<HTMLElement>("[data-cfgrollback]")?.dataset.cfgrollback;
+  if (rb) {
+    if (!confirm(`Rollback ${kind}.yaml ke v${rb}? Bot langsung memakai config itu.`)) return;
+    const r = await sendJson(`/api/config/${kind}/rollback/${rb}`, {});
+    toast(r.status === 200 ? `Rollback ke v${rb} berhasil` : `Rollback gagal`);
+    await loadConfigTab(true);
+    showValidation(r.body);
+  }
 });
 
 // ---------- toast ----------
@@ -688,7 +873,9 @@ async function refresh() {
     else if (current === "positions") await loadPositions();
     else if (current === "trades") await loadTrades();
     else if (current === "wallets") await loadWallets();
-    else if (current === "backtest") await initBacktest(); // hasil tidak auto-refresh
+    else if (current === "backtest")
+      await initBacktest(); // hasil tidak auto-refresh
+    else if (current === "config" && cfgLoadedKind === "") await loadConfigTab(); // editor tidak di-refresh otomatis
     // tab token tidak auto-refresh (hindari menimpa saat dibaca)
   } catch (err) {
     console.error(err);

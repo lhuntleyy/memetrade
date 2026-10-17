@@ -25,6 +25,7 @@ Baca dulu: `PLAN.md` (tujuan & fase), `PROGRESS.md` (posisi sekarang), lalu doku
 - Prod jalan sebagai systemd `memebot-core` (127.0.0.1:7071) & `memebot-dashboard` (127.0.0.1:3000) dari `/opt/memebot/app`, env `/etc/memebot/secrets.env`.
 - Dev pakai `.env` repo (port 7072/3001). Deploy ulang: rsync repo → `/opt/memebot/app`, `bun install --frozen-lockfile` sebagai `memebot`, `sudo systemctl restart memebot-core memebot-dashboard`.
 - Migrasi DB jalan di DB yang sama (dev = prod untuk saat ini) — hati-hati, jangan DELETE data observasi.
+- Config LIVE ada di `/var/lib/memebot/config` (diedit lewat tab Config dashboard → versi + rollback). `config/*.yaml` di repo hanya default; deploy tidak menimpa config live. Jangan pernah mengaktifkan mode live lewat config tanpa persetujuan eksplisit user.
 
 ## Alur kerja
 - Ambil task dari `PROGRESS.md`, ubah ke `[~]` saat dikerjakan, `[x]` saat selesai, tambah entri **Log** (tanggal, perubahan, temuan).

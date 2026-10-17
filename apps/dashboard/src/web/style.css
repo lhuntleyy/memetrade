@@ -293,3 +293,34 @@ h3.sub {
   font-weight: 500;
   margin: 16px 0 6px;
 }
+#cfg-yaml {
+  width: 100%;
+  min-height: 420px;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  font:
+    12px / 1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  tab-size: 2;
+  margin: 8px 0;
+}
+pre.diff {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  overflow-x: auto;
+  font-size: 12px;
+  max-height: 360px;
+}
+pre.diff .add {
+  color: var(--ok);
+}
+pre.diff .del {
+  color: var(--bad);
+}

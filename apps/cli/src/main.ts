@@ -2,7 +2,13 @@ import { createDb, migrate } from "@memebot/db";
 import { ConfigError, configSchemas, loadConfig } from "@memebot/shared";
 import { despike } from "../../core/src/market/despike.ts";
 import { PathStats } from "../../core/src/market/path-stats.ts";
-import { loadRefilteredData, loadReplayData, runReplay, sweepTpSl } from "../../core/src/research/replay.ts";
+import {
+  loadRefilteredData,
+  loadReplayData,
+  runReplay,
+  sweepTpSl,
+  walkForward,
+} from "../../core/src/research/replay.ts";
 
 const commands: Record<string, { help: string; run: (args: string[]) => Promise<number> }> = {
   migrate: {
@@ -51,6 +57,15 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
           });
           console.log(`TP${String(tp).padEnd(4)}${row.join("")}`);
         }
+        const wf = walkForward(data, exit, [15, 20, 25, 30, 40, 50], [10, 15, 20, 30], opts, 4, 10);
+        console.log("\nwalk-forward (4 fold, anchored):");
+        for (const f of wf.folds)
+          console.log(
+            `  fold ${f.fold}: terbaik latih ${f.best ? `TP${f.best.tp}/SL${f.best.sl}` : "-"} → uji ${f.test?.expectancyPct ?? "-"}% (${f.test?.trades ?? 0} trade) | config sekarang ${f.testCurrent.expectancyPct ?? "-"}%`,
+          );
+        console.log(
+          `  OOS optimasi: ${wf.oos.expectancyPct}%/trade (${wf.oos.trades}) | OOS config sekarang: ${wf.oosCurrent.expectancyPct}%/trade | kombinasi berbeda: ${wf.distinctBest}`,
+        );
         return 0;
       } finally {
         await db.close();
