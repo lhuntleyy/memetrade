@@ -1,0 +1,12 @@
+# memebot dashboard — HTTPS otomatis (Let's Encrypt) via sslip.io → IP publik VPS
+43-156-246-199.sslip.io {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	reverse_proxy 127.0.0.1:3000
+}

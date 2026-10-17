@@ -7,11 +7,11 @@ bankroll:
   min_sol_reserve: 0.15
 
 limits:
-  max_open_positions: 6
-  max_open_per_profile: 3
+  max_open_positions: 12          # dinaikkan untuk profile eksplorasi (paper)
+  max_open_per_profile: 4
   max_position_sol: 0.25
-  max_exposure_sol: 1.0
-  max_trades_per_day: 120
+  max_exposure_sol: 1.5
+  max_trades_per_day: 200
   reentry_cooldown_min: 30
   no_averaging_down: true
 
@@ -37,8 +37,9 @@ execution:
   default_route: jupiter_v2_order
   fallback_route: pump_direct
   slippage_bps_entry: 800
-  priority_fee_lamports: { entry: 100000, exit: 150000, panic_max: 2000000 }
-  tip_lamports: { entry: 10000, exit: 10000 }
+  # biaya murah sesuai preferensi user: priority fee total (lamports, bukan micro-lamport/CU)
+  priority_fee_lamports: { entry: 10000, exit: 50000, panic_max: 500000 }
+  tip_lamports: { entry: 10000, exit: 100000 }   # 0.00001 SOL entry, 0.0001 SOL exit (Sender swqos min 0.000005)
   max_fee_pct_of_trade: 2.0
   sender:
     url: "http://sg-sender.helius-rpc.com/fast"

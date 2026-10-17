@@ -71,3 +71,10 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 - Harga entry efektif termasuk biaya jaringan & rent ATA; PnL monitoring = harga × (1 − estimasi biaya exit). Trailing/TP dalam poin persen.
 - Entry ditolak kalau impact > `entry.max_price_impact_pct` (quote token baru bisa liar).
 - Mode live sengaja ditolak sampai Fase 5.
+
+### ADR-016 · 2026-10-17 · proposed — Dashboard publik via sslip.io + Caddy (menggantikan ADR-012 kalau diterapkan)
+- User tidak mau Tailscale. Opsi: domain `43-156-246-199.sslip.io` → Caddy (HTTPS Let's Encrypt otomatis, HSTS) → dashboard 127.0.0.1:3000; login Argon2 + cookie Secure + throttle per IP (IP dari X-Forwarded-For hanya kalau datang dari Caddy lokal).
+- Risiko: panel kontrol bot terekspos ke internet (dilindungi password 20 karakter acak + throttle). Diterapkan oleh user sendiri lewat `infra/scripts/enable-public-dashboard.sh`.
+
+### ADR-017 · 2026-10-17 · accepted — Exit "quick flip" 20–30% jual semua (preferensi user)
+- TP tunggal +30% (100%) + trailing aktif +20% jarak 4 poin. Tidak ada partial/moonbag. Bisa diubah di `exits.quick_flip`.

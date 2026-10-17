@@ -2,20 +2,21 @@
 # Ubah file ini -> core reload otomatis kalau valid; versi tersimpan di config_versions.
 version: 1
 
-# Sumber fitur saat ini (Fase 2): DexScreener (likuiditas, mcap, volume, txns, umur, price change)
-# + Jupiter Tokens v2 (holders, organic_score, dev_pct, traders_5m). Authority/extension dicek di tahap security.
-# Field yang butuh GMGN (top10_pct, bundler_pct, sniper_pct, dev_rug_ratio) di-set on_null: ignore
-# sampai collector GMGN aktif — kembalikan ke reject begitu datanya ada.
+# Sumber fitur: DexScreener (likuiditas, mcap, volume, txns, umur, price change)
+# + GMGN (top10_pct, bundler_pct, sniper_pct, rat_trader_pct, bot_degen_pct, fresh_wallet_pct,
+#   dev_hold_pct, dev_created_count, smart_wallets, dex_paid, sell/buy tax)
+# + Jupiter (holders, organic_score, dev_pct, traders_5m). Authority/extension/honeypot dicek di tahap security.
 defaults:
   on_null: reject            # "missing data is never good news"
   critical_fields: [liquidity_usd, mcap_usd]
-  cross_check:               # belum dievaluasi engine (butuh 2 provider untuk field yang sama)
+  cross_check:               # belum dievaluasi engine
     top10_pct: { providers: [gmgn, solanatracker], max_abs_diff: 8 }
 
 profiles:
+  # ---------------- profile utama (filter ketat) ----------------
   migration_momentum:
     mode: paper
-    bucket_pct: 40
+    bucket_pct: 25
     triggers: [pumpportal.migration]
     wait_after_trigger_sec: 30
     eval_window_sec: 900
@@ -23,11 +24,11 @@ profiles:
       - { field: liquidity_usd,     op: gte,     value: 15000 }
       - { field: mcap_usd,          op: between, value: [40000, 600000] }
       - { field: holders,           op: gte,     value: 150 }
-      - { field: top10_pct,         op: lte,     value: 30,  on_null: ignore }   # GMGN
-      - { field: dev_pct,           op: lte,     value: 5 }
-      - { field: bundler_pct,       op: lte,     value: 20,  on_null: ignore }   # GMGN
-      - { field: sniper_pct,        op: lte,     value: 15,  on_null: ignore }   # GMGN
-      - { field: dev_rug_ratio,     op: lte,     value: 0.5, on_null: ignore }   # GMGN
+      - { field: top10_pct,         op: lte,     value: 30 }
+      - { field: dev_hold_pct,      op: lte,     value: 5 }
+      - { field: bundler_pct,       op: lte,     value: 30 }
+      - { field: sniper_pct,        op: lte,     value: 15 }
+      - { field: rat_trader_pct,    op: lte,     value: 10 }
       - { field: traders_5m,        op: gte,     value: 30 }
       - { field: buy_sell_ratio_5m, op: gte,     value: 1.2 }
       - { field: price_change_5m,   op: between, value: [-20, 150] }
@@ -36,11 +37,11 @@ profiles:
       setup:   { tf: 1m,  any: ["pullback_pct between 8 and 30", "range_bars >= 3"] }
       trigger: { tf: 15s, all: ["close > setup_high", "vol_z > 2", "buy_sell_ratio > 1.3"] }
     entry: { size_sol: 0.1, max_price_impact_pct: 2.0 }
-    exits: { ref: exits.momentum_fast }
+    exits: { ref: exits.quick_flip }
 
   trending_momentum:
     mode: paper
-    bucket_pct: 40
+    bucket_pct: 25
     triggers: [dexscreener.boost, dexscreener.profile, gmgn.trending, gmgn.hot]
     eval_window_sec: 3600
     filters:
@@ -48,7 +49,8 @@ profiles:
       - { field: liquidity_usd, op: gte,     value: 30000 }
       - { field: mcap_usd,      op: between, value: [100000, 5000000] }
       - { field: organic_score, op: gte,     value: 40 }
-      - { field: top10_pct,     op: lte,     value: 25, on_null: ignore }   # GMGN
+      - { field: top10_pct,     op: lte,     value: 25 }
+      - { field: bundler_pct,   op: lte,     value: 30 }
       - { field: holders,       op: gte,     value: 500 }
       - { field: vol_1h_usd,    op: gte,     value: 50000 }
     mtf:
@@ -56,9 +58,75 @@ profiles:
       setup:   { tf: 15m, all: ["pullback_to_ema21_pct <= 5", "vol_declining_bars >= 2"] }
       trigger: { tf: 1m,  all: ["close > prev_high", "vol_z > 1.5"] }
     entry: { size_sol: 0.15, max_price_impact_pct: 1.5 }
-    exits: { ref: exits.momentum_swingy }
+    exits: { ref: exits.quick_flip }
+
+  # ---------------- profile EKSPLORASI (paper saja, filter longgar, size kecil) ----------------
+  # Tujuan: kumpulkan banyak trade paper secepatnya supaya filter/exit bisa dituning dari data.
+  # JANGAN dijadikan live tanpa evaluasi (Fase 4).
+  explore_new_token:
+    mode: paper
+    bucket_pct: 15
+    triggers: [pumpportal.new_token]
+    wait_after_trigger_sec: 60        # tunggu data pasar & holder terbentuk
+    filters:
+      - { field: mcap_usd,          op: between, value: [5000, 150000] }
+      - { field: holders,           op: gte,     value: 20 }
+      - { field: traders_5m,        op: gte,     value: 10 }
+      - { field: buy_sell_ratio_5m, op: gte,     value: 1.0 }
+      # field GMGN: eksplorasi tetap jalan kalau GMGN kena rate limit (free tier 5/5)
+      - { field: dev_hold_pct,      op: lte,     value: 15, on_null: ignore }
+      - { field: top10_pct,         op: lte,     value: 50, on_null: ignore }
+      - { field: bundler_pct,       op: lte,     value: 60, on_null: ignore }
+    entry: { size_sol: 0.05, max_price_impact_pct: 5.0 }
+    exits: { ref: exits.quick_flip }
+
+  explore_migration:
+    mode: paper
+    bucket_pct: 15
+    triggers: [pumpportal.migration]
+    wait_after_trigger_sec: 20
+    filters:
+      - { field: liquidity_usd, op: gte, value: 8000 }
+      - { field: holders,       op: gte, value: 50 }
+      - { field: top10_pct,     op: lte, value: 45, on_null: ignore }
+      - { field: bundler_pct,   op: lte, value: 60, on_null: ignore }
+      - { field: dev_hold_pct,  op: lte, value: 10, on_null: ignore }
+    entry: { size_sol: 0.05, max_price_impact_pct: 4.0 }
+    exits: { ref: exits.quick_flip }
+
+  explore_trending:
+    mode: paper
+    bucket_pct: 15
+    triggers: [dexscreener.boost, dexscreener.profile]
+    filters:
+      - { field: liquidity_usd, op: gte,     value: 15000 }
+      - { field: mcap_usd,      op: between, value: [50000, 20000000] }
+      - { field: holders,       op: gte,     value: 200 }
+      - { field: top10_pct,     op: lte,     value: 40, on_null: ignore }
+    entry: { size_sol: 0.05, max_price_impact_pct: 3.0 }
+    exits: { ref: exits.quick_flip }
 
 exits:
+  # Gaya user: ambil untung 20–30% lalu JUAL SEMUA (tanpa jual bertahap / moonbag).
+  #  - sentuh +30%  → jual 100% (take profit)
+  #  - sudah ≥ +20% lalu turun 4 poin dari puncak → jual 100% (mengunci ±16–26%)
+  quick_flip:
+    hard_sl_pct: -15
+    momentum_fail: { within_sec: 180, min_gain_pct: 5 }
+    take_profit_ladder:
+      - { at_pct: 30, sell_pct: 100 }
+    trailing:
+      tiers:
+        - { activate_at_pct: 20, distance_pct: 4 }
+    max_hold_sec: 1800
+    stale: { no_new_high_sec: 600, max_pnl_pct: 5 }
+    events:
+      dev_sell_pct_gte: 20
+      liquidity_drop_pct_1m: 25
+      security_flag_change: true
+    panic: { slippage_bps: 2500, priority_multiplier: 3, retries: 4 }
+
+  # (cadangan, tidak dipakai profile mana pun sekarang)
   momentum_fast:
     hard_sl_pct: -15
     momentum_fail: { within_sec: 90, min_gain_pct: 5 }
@@ -74,25 +142,4 @@ exits:
         - { activate_at_pct: 100, distance_pct: 20 }
     max_hold_sec: 1800
     stale: { no_new_high_sec: 300, max_pnl_pct: 5 }
-    events:
-      dev_sell_pct_gte: 20
-      top_holder_sell_pct_gte: 50
-      liquidity_drop_pct_1m: 25
-      sell_pressure: { window_sec: 30, sell_buy_ratio_gte: 3 }
-      security_flag_change: true
     panic: { slippage_bps: 2500, priority_multiplier: 3, retries: 4 }
-
-  momentum_swingy:
-    hard_sl_pct: -18
-    structure_sl: { below: setup_low, buffer_pct: 2 }
-    break_even: { activate_at_pct: 30, lock_pct: 5 }
-    take_profit_ladder:
-      - { at_pct: 30, sell_pct: 33 }
-      - { at_pct: 80, sell_pct: 33 }
-    trailing:
-      tiers:
-        - { activate_at_pct: 20,  distance_pct: 12 }
-        - { activate_at_pct: 100, distance_pct: 25 }
-    max_hold_sec: 21600
-    events: { dev_sell_pct_gte: 20, liquidity_drop_pct_1m: 30, security_flag_change: true }
-    panic: { slippage_bps: 2000, priority_multiplier: 2, retries: 4 }

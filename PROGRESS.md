@@ -61,7 +61,7 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [~] P1-14 Observasi jalan 24/7 sejak 2026-10-17 05:33 UTC (systemd `memebot-core` + `memebot-dashboard`); laporan setelah ≥ 7 hari
 
 ## Fase 2 — Enrichment, security, filter
-- [!] P2-01 Provider adapter GMGN — keypair Ed25519 sudah dibuat (`/etc/memebot/gmgn-keypair.pem`, publik di `infra/gmgn-public-key.pem`); **menunggu user buat API key di gmgn.ai + whitelist IP 43.156.246.199**
+- [x] P2-01 Adapter GMGN read-only (`/v1/token/info` + `/v1/token/security`): top10, bundler, sniper, rat trader, bot degen, fresh wallet, dev hold, jumlah token dev, smart wallet, DEX paid, honeypot & pajak
 - [x] P2-02 Provider adapter Jupiter Tokens v2 (holders, organic score, dev %, dev mints, traders/net buyers 5m) — keyless ±25 req/menit
 - [ ] P2-03 Provider Solana Tracker / RugCheck (cross-check, opsional)
 - [~] P2-04 Rate limiter, cache (security 10 menit, Jupiter 60 dtk), timeout, null gate ✅; cross-check 2 provider belum (butuh GMGN/Solana Tracker)
@@ -170,3 +170,12 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
   - Uji end-to-end ke DB asli dengan mint palsu: opened → TP1 (40%) → trailing → CLOSED, +26.4% setelah fee; order/fill/decision tercatat; data uji dihapus.
   - 58 test pass, tsc & biome bersih. Deploy produksi OK.
 - Catatan jujur: sinyal akan jarang (filter ketat, MTF & data GMGN belum ada, hanya 2 profile). Target 300 trade/profile bisa lama → pertimbangkan profile "eksplorasi" yang lebih longgar khusus paper untuk belajar lebih cepat.
+
+### 2026-10-17 (lanjutan) — GMGN, exit 20–30%, eksplorasi, dashboard publik
+- GMGN API key terpasang. Dari source gmgn-cli: endpoint data cukup `X-APIKEY` + `timestamp` + `client_id` (private key hanya untuk swap/order → tidak dipakai). Adapter `enrich/gmgn.ts` + test; honeypot / tidak bisa jual / pajak >10% → gagal security. Filter GMGN dikembalikan ke `on_null: reject`.
+- Exit sesuai preferensi user: `exits.quick_flip` — jual 100% di +30%, atau setelah ≥+20% turun 4 poin dari puncak → jual 100% (±16–26%); SL −15%, momentum gagal 3 menit, stale 10 menit, max hold 30 menit. Semua profile pakai quick_flip.
+- Fee murah: priority 10k/50k lamports (entry/exit), tip 0.00001 SOL entry / 0.0001 SOL exit.
+- Profile eksplorasi paper (filter longgar, 0.05 SOL): `explore_new_token` (pump.fun baru, tunggu 60 dtk), `explore_migration`, `explore_trending`. Limit risk dinaikkan (12 posisi, 4/profile, exposure 1.5 SOL, 200 trade/hari).
+- Dashboard publik via `https://43-156-246-199.sslip.io` (Caddy + Let's Encrypt): Caddy sudah terpasang, Caddyfile & skrip `infra/scripts/enable-public-dashboard.sh` siap. **Penerapan (buka port 80/443 + ekspos publik) diblok sistem keamanan auto-mode → user perlu menjalankan skrip sendiri** dan membuka port 80/443 di Security Group Tencent. Dashboard tetap jalan di IP Tailscale sampai itu dilakukan. Header X-Forwarded-For sekarang hanya dipercaya dari reverse proxy lokal (`DASHBOARD_TRUST_PROXY=1`).
+- Temuan GMGN free tier: leaky bucket **5/5**; request saat kena limit memperpanjang ban s/d 5 menit (`RATE_LIMIT_BANNED`). Bot sempat terban karena terus memanggil saat 429 → sekarang: info & security dipanggil berurutan, 30 req/menit, dan saat 429 SEMUA panggilan GMGN berhenti sampai `reset_at`. Profile eksplorasi mengabaikan field GMGN yang null; profile utama tetap reject. Upgrade plan GMGN (Plus 20/20) akan membuat data holder jauh lebih lengkap.
+- Hasil awal produksi: 2 sinyal `migration_momentum` lolos filter tapi entry ditolak guard price impact (16–18% > batas 2%); 1 entry eksplorasi gagal karena simulasi tx gagal (p 8%). Mayoritas token baru gagal di `mcap_usd:between` / `holders:gte` saat dievaluasi 60 dtk setelah create.

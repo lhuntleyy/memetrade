@@ -177,11 +177,19 @@ const server = Bun.serve({
   fetch: () => new Response("not found", { status: 404 }),
 });
 
-clientIp = (req) =>
-  req.headers.get("tailscale-user-login") ??
-  req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-  server.requestIP(req)?.address ??
-  "unknown";
+// Header forwarded hanya dipercaya kalau dashboard di belakang reverse proxy lokal (Caddy) —
+// selain itu bisa dipalsukan klien untuk mengakali throttle login.
+const trustProxy = process.env.DASHBOARD_TRUST_PROXY === "1";
+clientIp = (req) => {
+  const sock = server.requestIP(req)?.address ?? "unknown";
+  const fromLocalProxy = sock === "127.0.0.1" || sock === "::1" || sock === "::ffff:127.0.0.1";
+  if (trustProxy && fromLocalProxy) {
+    // Caddy menulis IP klien asli sebagai entri terakhir X-Forwarded-For
+    const xff = req.headers.get("x-forwarded-for")?.split(",").pop()?.trim();
+    if (xff) return xff;
+  }
+  return sock;
+};
 
 // ---- relay event dari core → browser (hanya event ringan) ----
 const RELAY = new Set(["TokenTriggered", "Heartbeat", "Control", "CircuitBreaker", "Position"]);

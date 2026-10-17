@@ -13,6 +13,7 @@ import { SolanaRpc } from "@memebot/solana";
 import { DexScreenerClient, startDexScreenerFeeds } from "./collectors/dexscreener.ts";
 import { startPumpPortal } from "./collectors/pumpportal.ts";
 import { startControlServer } from "./control.ts";
+import { GmgnClient } from "./enrich/gmgn.ts";
 import { JupiterTokens } from "./enrich/jupiter.ts";
 import { startRecorder } from "./journal/recorder.ts";
 import { KillSwitch } from "./kill-switch.ts";
@@ -67,12 +68,14 @@ const dexFeeds = src.dexscreener.enabled ? startDexScreenerFeeds(src.dexscreener
 const rpc = new SolanaRpc();
 if (!process.env.SOLANA_RPC_URL)
   log.warn("SOLANA_RPC_URL belum di-set — pakai RPC publik (rate limit ketat)");
+const gmgn = process.env.GMGN_API_KEY ? new GmgnClient(process.env.GMGN_API_KEY, recorder.recordUsage) : null;
 const pipeline = new Pipeline({
   bus,
   db,
   log,
   tracker,
   jupiter: new JupiterTokens(recorder.recordUsage),
+  gmgn,
   rpc,
   strategy: () => configs.strategy.data,
   strategyVersion: () => configVersion.strategy,
@@ -107,7 +110,10 @@ const positions = new PositionManager({
   symbolOf: (mint) => symbols.get(mint) ?? null,
 });
 
-if (src.gmgn.enabled) log.warn("collector GMGN belum diimplementasi (butuh API key) — dilewati");
+if (src.gmgn.enabled)
+  log.warn(
+    "collector trigger GMGN (trending/trenches) belum diimplementasi — enrichment GMGN tetap aktif kalau GMGN_API_KEY ada",
+  );
 if (src.meteora.enabled) log.warn("collector Meteora belum diimplementasi — dilewati");
 
 const triggerCounts: Record<string, number> = {};
@@ -144,6 +150,7 @@ const control = startControlServer({
     tracker: { activeTokens: tracker.activeTokens, activePaths: tracker.activePaths, ...tracker.stats },
     triggers: triggerCounts,
     pipeline: pipeline.stats,
+    gmgn: gmgn ? { pausedForSec: gmgn.pausedForSec, ...gmgn.stats } : "off",
     rpc: rpc.hosts(),
     journal: recorder.stats(),
     trading: positions.summary(),

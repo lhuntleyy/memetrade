@@ -137,7 +137,7 @@ describe("risk manager", () => {
   });
 
   test("exposure & saldo minimum", () => {
-    const open = Array.from({ length: 5 }, (_, i) => ({ profile: `x${i}`, mint: `M${i}`, sizeSol: 0.2 }));
+    const open = Array.from({ length: 8 }, (_, i) => ({ profile: `x${i}`, mint: `M${i}`, sizeSol: 0.2 })); // 1.6 SOL > limit;
     expect(checkRisk(trade, base({ open }), req).reasons).toContain("max_exposure");
     expect(checkRisk(trade, base({ freeSol: 0.2 }), req).reasons).toContain("insufficient_balance");
   });

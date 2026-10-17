@@ -2,6 +2,7 @@ import { type Db, pgTextArray } from "@memebot/db";
 import type { EventBus, EventOf, Logger, Stage, StrategyConfig } from "@memebot/shared";
 import type { SolanaRpc } from "@memebot/solana";
 import { dexFeatures, type Features, mergeFeatures } from "../enrich/features.ts";
+import { type GmgnClient, type GmgnData, gmgnFeatures, gmgnSecurityReasons } from "../enrich/gmgn.ts";
 import { type JupiterTokens, type JupToken, jupiterFeatures } from "../enrich/jupiter.ts";
 import { BatchWriter } from "../journal/batch.ts";
 import type { MarketTracker } from "../market/tracker.ts";
@@ -36,6 +37,8 @@ export interface PipelineDeps {
   log: Logger;
   tracker: MarketTracker;
   jupiter: JupiterTokens;
+  /** null kalau GMGN_API_KEY tidak di-set */
+  gmgn: GmgnClient | null;
   rpc: SolanaRpc;
   strategy: () => StrategyConfig;
   strategyVersion: () => number;
@@ -58,6 +61,7 @@ export class Pipeline {
   private timers = new Set<Timer>();
   private secCache = new Map<string, { v: MintVerdict; at: number }>();
   private jupCache = new Map<string, { v: JupToken | null; at: number }>();
+  private gmgnCache = new Map<string, { v: GmgnData | null; at: number }>();
   private decisions: BatchWriter<DecisionRow>;
   private stopped = false;
   stats = {
@@ -140,8 +144,20 @@ export class Pipeline {
     if (!pair) this.stats.noPair++;
 
     const now = Date.now();
-    const [jup, sec] = await Promise.all([this.jupiterCached(job.mint), this.securityCached(job.mint)]);
-    const features: Features = mergeFeatures(dexFeatures(pair, now), jupiterFeatures(jup));
+    const [jup, secOnchain, gm] = await Promise.all([
+      this.jupiterCached(job.mint),
+      this.securityCached(job.mint),
+      this.gmgnCached(job.mint),
+    ]);
+    // GMGN dulu untuk distribusi holder (top10/bundler/sniper), DexScreener untuk pasar, Jupiter untuk holders/organic
+    const features: Features = mergeFeatures(dexFeatures(pair, now), gmgnFeatures(gm), jupiterFeatures(jup));
+    const gmReasons = gmgnSecurityReasons(gm);
+    const sec = {
+      ...secOnchain,
+      reasons: [...secOnchain.reasons, ...gmReasons],
+      verdict:
+        secOnchain.verdict === "pass" && gmReasons.length === 0 ? ("pass" as const) : ("fail" as const),
+    };
     this.stats.evaluated++;
 
     const base = {
@@ -217,6 +233,21 @@ export class Pipeline {
     await this.d.db`
       INSERT INTO security_reports (mint, mint_authority, freeze_authority, extensions, verdict, reasons)
       VALUES (${mint}, ${v.mintAuthority}, ${v.freezeAuthority}, ${{ list: v.extensions, warnings: v.warnings, program: v.program }}, ${v.verdict}, ${pgTextArray(v.reasons)})`;
+    return v;
+  }
+
+  private async gmgnCached(mint: string): Promise<GmgnData | null> {
+    if (!this.d.gmgn) return null;
+    const c = this.gmgnCache.get(mint);
+    if (c && Date.now() - c.at < JUP_TTL_MS) return c.v;
+    let v: GmgnData | null = null;
+    try {
+      v = await this.d.gmgn.token(mint);
+    } catch (err) {
+      this.d.log.debug({ mint, err: String(err) }, "gmgn gagal");
+    }
+    this.gmgnCache.set(mint, { v, at: Date.now() });
+    if (this.gmgnCache.size > 5000) this.gmgnCache.delete(this.gmgnCache.keys().next().value!);
     return v;
   }
 
