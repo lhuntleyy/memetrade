@@ -3,6 +3,20 @@ import { ConfigError, configSchemas, loadConfig } from "@memebot/shared";
 import { despike } from "../../core/src/market/despike.ts";
 import { PathStats } from "../../core/src/market/path-stats.ts";
 import {
+  bucketize,
+  type DatasetRow,
+  delayRows,
+  groupStats,
+  loadDataset,
+  loadPathCandidates,
+  numericFeatures,
+  ruleLabel,
+  searchRules,
+  spearman,
+  walkForwardDelay,
+  walkForwardRules,
+} from "../../core/src/research/features.ts";
+import {
   loadRefilteredData,
   loadReplayData,
   runReplay,
@@ -102,6 +116,167 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         console.log(
           "catatan: fitur diambil saat evaluasi lama (waktu tunggu lama), bukan waktu tunggu config sekarang.",
         );
+        return 0;
+      } finally {
+        await db.close();
+      }
+    },
+  },
+  analyze: {
+    help: "analisa fitur → PnL replay per sumber + pencarian rule + walk-forward: analyze [jam=24] [file-laporan]",
+    async run(args) {
+      const [hoursArg = "24", outPath] = args;
+      const hours = Number(hoursArg);
+      const strategy = (await loadConfig("strategy")).data;
+      const exit = strategy.exits.quick_flip ?? Object.values(strategy.exits)[0]!;
+      const db = createDb(process.env.DATABASE_URL_RO ?? process.env.DATABASE_URL, { max: 2 });
+      try {
+        const replay = { latencySec: 1, entryCostPct: 2, exitCostPct: 2 };
+        const rows = await loadDataset(db, { hours, exit, replay, horizonSec: exit.max_hold_sec + 60 });
+        const groups: [string, (r: DatasetRow) => boolean][] = [
+          ["Token baru pump.fun (pumpportal.new_token)", (r) => r.source === "pumpportal.new_token"],
+          ["Migrasi pump.fun (pumpportal.migration)", (r) => r.source === "pumpportal.migration"],
+          ["DexScreener profile/boost", (r) => r.source.startsWith("dexscreener.")],
+          ["Konfluensi smart money", (r) => r.source.startsWith("wallet.")],
+        ];
+        const md: string[] = [];
+        const p = (x: string) => md.push(x);
+        const st = (g: ReturnType<typeof groupStats>) =>
+          `${g.n} trade · mean ${g.meanPnl ?? "–"}% · median ${g.medianPnl ?? "–"}% · win ${g.winRate ?? "–"}% · puncak≥25% ${g.hit25 ?? "–"}% · kena SL ${g.slRate ?? "–"}%`;
+        p(
+          `# Analisa fitur → hasil trade (${new Date().toISOString().slice(0, 16)} UTC, ${hours} jam terakhir)`,
+        );
+        p("");
+        p(
+          `Target = PnL replay exit \`quick_flip\` (TP +30%, trailing dari +20% jarak 4, SL −15%, momentum-fail 3 mnt, max hold 30 mnt) kalau masuk ±1 dtk setelah token dievaluasi, biaya entry 2% + exit 2%. Token yang gagal security dikeluarkan.`,
+        );
+        p("");
+        p(
+          `Total baris: ${rows.length} · dengan data harga setelah entry: ${rows.filter((r) => r.pnl !== null).length}`,
+        );
+        for (const [name, pred] of groups) {
+          const g = rows.filter(pred);
+          const traded = g.filter((r) => r.pnl !== null);
+          p("");
+          p(`## ${name}`);
+          p("");
+          p(`**Baseline (semua):** ${st(groupStats(g))}`);
+          if (traded.length < 60) {
+            p("");
+            p(`_Sampel terlalu kecil (${traded.length} trade) untuk analisa fitur yang bisa dipercaya._`);
+            continue;
+          }
+          const feats = numericFeatures(traded, 0.3);
+          const corr = feats
+            .map((f) => ({ f, ...spearman(traded, f) }))
+            .filter((c) => c.rho !== null)
+            .sort((a, b) => Math.abs(b.rho!) - Math.abs(a.rho!));
+          p("");
+          p("### Korelasi peringkat (Spearman) fitur ↔ PnL");
+          p("");
+          p("| Fitur | rho | n |");
+          p("|---|---|---|");
+          for (const c of corr.slice(0, 12)) p(`| ${c.f} | ${c.rho} | ${c.n} |`);
+          p("");
+          p("### Bucket kuantil fitur paling berpengaruh");
+          for (const c of corr.slice(0, 6)) {
+            p("");
+            p(`**${c.f}** (rho ${c.rho})`);
+            p("");
+            p("| Rentang | n | mean PnL | median | win | puncak≥25% | kena SL |");
+            p("|---|---|---|---|---|---|---|");
+            for (const b of bucketize(traded, c.f, 5))
+              p(
+                `| ${b.label} | ${b.stats.n} | ${b.stats.meanPnl}% | ${b.stats.medianPnl}% | ${b.stats.winRate}% | ${b.stats.hit25}% | ${b.stats.slRate}% |`,
+              );
+          }
+          const minN = Math.max(20, Math.floor(traded.length * 0.08));
+          const best = searchRules(traded, feats, minN).slice(0, 5);
+          p("");
+          p(`### Rule terbaik in-sample (min ${minN} trade) — JANGAN dipercaya sebelum lihat walk-forward`);
+          p("");
+          p("| Rule | hasil |");
+          p("|---|---|");
+          for (const b of best) p(`| ${ruleLabel(b.rules)} | ${st(b.stats)} |`);
+          const wf = walkForwardRules(traded, feats, 4, Math.max(15, Math.floor(minN / 2)));
+          p("");
+          p("### Walk-forward pemilihan rule (4 fold, anchored)");
+          p("");
+          p("| Fold | rule terpilih (dari data lampau) | latih mean | uji: rule | uji: tanpa filter |");
+          p("|---|---|---|---|---|");
+          for (const f of wf.folds)
+            p(
+              `| ${f.fold} | ${f.chosen} | ${f.trainMean ?? "–"}% (${f.trainN}) | ${f.test.meanPnl ?? "–"}% (${f.test.n}) | ${f.baseline.meanPnl ?? "–"}% (${f.baseline.n}) |`,
+            );
+          p("");
+          p(`**Out-of-sample gabungan:** dengan rule → ${st(wf.oos)}`);
+          p("");
+          p(`**Out-of-sample tanpa filter:** ${st(wf.oosBaseline)}`);
+          p("");
+          p(`Rule paling sering terpilih: \`${wf.mostChosen}\``);
+        }
+        // ---- uji waktu entry: semua trigger dengan jalur harga (bukan hanya yang dievaluasi) ----
+        const delays = [0.5, 2, 5, 10, 15, 20];
+        const paths = await loadPathCandidates(db, hours, 60);
+        p("");
+        p("## Uji waktu entry (semua trigger yang punya jalur harga, tanpa filter)");
+        p("");
+        p(
+          "Masuk N menit setelah trigger, exit quick_flip, biaya 2%+2%. Sampel jauh lebih besar daripada token yang dievaluasi pipeline.",
+        );
+        const srcGroups: [string, (s: string) => boolean][] = [
+          ["Token baru", (s) => s === "pumpportal.new_token"],
+          ["Migrasi", (s) => s === "pumpportal.migration"],
+          ["DexScreener", (s) => s.startsWith("dexscreener.")],
+        ];
+        for (const [name, pred] of srcGroups) {
+          const sub = { cands: paths.cands.filter((c) => pred(c.source)), ticks: paths.ticks };
+          p("");
+          p(`### ${name} (${sub.cands.length} trigger)`);
+          p("");
+          p("| Masuk setelah | trade | mean PnL | median | win | puncak≥25% | kena SL |");
+          p("|---|---|---|---|---|---|---|");
+          for (const d of delays) {
+            const g = groupStats(delayRows(sub, d, exit, replay));
+            p(
+              `| ${d} menit | ${g.n} | ${g.meanPnl ?? "–"}% | ${g.medianPnl ?? "–"}% | ${g.winRate ?? "–"}% | ${g.hit25 ?? "–"}% | ${g.slRate ?? "–"}% |`,
+            );
+          }
+          if (sub.cands.length >= 60) {
+            const wf = walkForwardDelay(sub, delays, exit, replay, 4, 15);
+            p("");
+            p(
+              `Walk-forward pilihan delay: ${wf.folds.map((f) => `fold ${f.fold}: ${f.chosen} mnt → ${f.test.meanPnl ?? "–"}% (n ${f.test.n})`).join(" · ")}`,
+            );
+            p("");
+            p(`**OOS delay terpilih:** ${st(wf.oos)} · **OOS masuk 0,5 menit:** ${st(wf.oosDelay0)}`);
+          }
+        }
+        // ---- sensitivitas biaya: apakah ada edge yang cuma termakan biaya? ----
+        p("");
+        p("## Sensitivitas biaya (masuk 0,5 menit setelah trigger, tanpa filter)");
+        p("");
+        p(
+          "Biaya round-trip = entry + exit (fee pool/platform + price impact + jaringan). Token likuid pasca-migrasi realistis ±1–2%, token bonding curve baru ±3–5%.",
+        );
+        p("");
+        p("| Sumber | biaya 1% | biaya 2% | biaya 3% | biaya 4% |");
+        p("|---|---|---|---|---|");
+        for (const [name, pred] of srcGroups) {
+          const sub = { cands: paths.cands.filter((c) => pred(c.source)), ticks: paths.ticks };
+          const cells = [1, 2, 3, 4].map((c) => {
+            const g = groupStats(
+              delayRows(sub, 0.5, exit, { latencySec: 1, entryCostPct: c / 2, exitCostPct: c / 2 }),
+            );
+            return `${g.meanPnl ?? "–"}% (med ${g.medianPnl ?? "–"}%)`;
+          });
+          p(`| ${name} | ${cells.join(" | ")} |`);
+        }
+        const text = md.join("\n");
+        if (outPath) {
+          await Bun.write(outPath, `${text}\n`);
+          console.log(`laporan ditulis ke ${outPath}`);
+        } else console.log(text);
         return 0;
       } finally {
         await db.close();

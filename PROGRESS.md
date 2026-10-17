@@ -219,3 +219,9 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - Editor config: core `config-admin.ts` (GET/validate/save/versions/rollback lewat control API, tulis atomik, versi + diff di `config_versions`, **guard: mode live ditolak** kecuali env `MEMEBOT_ALLOW_LIVE_CONFIG=1`); dashboard tab **Config** (editor YAML, Validasi & diff berwarna, Simpan dengan catatan, riwayat versi, Lihat, Rollback).
 - Bug ditemukan saat uji: watcher file putus setelah penulisan atomik (inode baru) → rollback kedua tidak dimuat core. Diperbaiki: watcher memantau direktori (+ test rename berulang). Uji e2e via HTTPS publik: validasi/diff, config invalid ditolak, mode live 422, simpan → v19 aktif & dimuat, rollback → v15 aktif & dimuat (isi sama persis).
 - 79 test pass, tsc & biome bersih.
+
+### 2026-10-17 (lanjutan) — analisa fitur & usulan filter
+- Modul `research/features.ts` (dites): dataset keputusan + PnL replay quick_flip setelah biaya, statistik per grup, bucket kuantil, Spearman, pencarian rule (tunggal + pasangan), walk-forward pemilihan rule, uji delay entry dari semua trigger, sensitivitas biaya. CLI `analyze [jam] [file]`.
+- Laporan `docs/analysis/2026-10-17-fitur.md`, kesimpulan `docs/analysis/2026-10-17-kesimpulan.md`.
+- Temuan utama: belum ada filter yang lolos walk-forward (9 jam data); token baru negatif di semua delay & biaya; "masuk lebih lambat" = bias seleksi; migrasi & DexScreener positif HANYA kalau biaya round-trip ≤ 1–2% → edge ada di eksekusi murah pada token likuid.
+- Usulan (paper): matikan `explore_new_token`; migrasi/DexScreener wajib likuiditas tinggi & tolak serial deployer; ukur biaya eksekusi nyata; ulangi analisa tiap 24 jam. Menunggu persetujuan user.
