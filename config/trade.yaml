@@ -54,6 +54,13 @@ execution:
     interval_ms: 4000
     max_staleness_ms: 20000
     budget_per_min: 35
+  # Ukur biaya eksekusi asli: tiap interval, 1 token yang baru dievaluasi → quote beli size_sol → quote jual hasilnya.
+  # Catatan: jual di-quote pada pool SEBELUM beli kita → sedikit melebihkan price impact (batas atas yang konservatif).
+  cost_probe:
+    enabled: true
+    interval_sec: 60
+    size_sol: 0.1
+    sources: [pumpportal.migration, "dexscreener.", "wallet."]
   confirm_timeout_ms: 20000
 
 paper:

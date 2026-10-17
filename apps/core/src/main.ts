@@ -19,6 +19,7 @@ import { JupiterTokens } from "./enrich/jupiter.ts";
 import { startRecorder } from "./journal/recorder.ts";
 import { KillSwitch } from "./kill-switch.ts";
 import { MarketTracker } from "./market/tracker.ts";
+import { CostProbe } from "./research/cost-probe.ts";
 import { Pipeline } from "./strategy/pipeline.ts";
 import { PaperExecutor } from "./trading/paper-executor.ts";
 import { PositionManager } from "./trading/position-manager.ts";
@@ -102,6 +103,7 @@ const executor = new PaperExecutor(
   },
   recorder.recordUsage,
 );
+const costProbe = new CostProbe(() => configs.trade.data, executor, db, log);
 const positions = new PositionManager({
   bus,
   db,
@@ -200,6 +202,7 @@ const control = startControlServer({
     journal: recorder.stats(),
     trading: positions.summary(),
     quotes: executor.quoteStats,
+    costProbe: costProbe.stats,
     wallets: wallets ? wallets.stats : "off",
     smartMoney: confluence ? confluence.stats : "off",
   }),
@@ -297,6 +300,7 @@ async function shutdown(signal: string) {
   pump?.stop();
   dexFeeds?.stop();
   positions.stop();
+  costProbe.stop();
   wallets?.stop();
   confluence?.stop();
   clearInterval(scoreTimer);

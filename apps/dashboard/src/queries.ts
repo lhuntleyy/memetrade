@@ -256,3 +256,29 @@ export function watchSummary(db: Db) {
            round(max(score_value)::numeric, 1) AS max_score
     FROM watch_wallets`;
 }
+
+/** Biaya eksekusi terukur (cost probe) per bucket likuiditas. */
+export function costByLiquidity(db: Db, hours: number) {
+  return db`
+    SELECT CASE WHEN liquidity_usd < 10000 THEN '< $10rb'
+                WHEN liquidity_usd < 30000 THEN '$10–30rb'
+                WHEN liquidity_usd < 50000 THEN '$30–50rb'
+                WHEN liquidity_usd < 100000 THEN '$50–100rb'
+                ELSE '≥ $100rb' END AS bucket,
+           min(liquidity_usd) AS lo,
+           count(*)::int AS n,
+           round(percentile_cont(0.5) WITHIN GROUP (ORDER BY total_cost_pct)::numeric, 2) AS med_total,
+           round(percentile_cont(0.75) WITHIN GROUP (ORDER BY total_cost_pct)::numeric, 2) AS p75_total,
+           round(percentile_cont(0.5) WITHIN GROUP (ORDER BY quote_cost_pct)::numeric, 2) AS med_quote,
+           round(avg(network_cost_pct)::numeric, 2) AS network
+    FROM cost_probes
+    WHERE ts > now() - make_interval(hours => ${hours}) AND error IS NULL AND liquidity_usd IS NOT NULL
+    GROUP BY 1 ORDER BY lo`;
+}
+
+export function costProbeCounts(db: Db, hours: number) {
+  return db`
+    SELECT count(*)::int AS total, count(*) FILTER (WHERE error IS NOT NULL)::int AS failed,
+           round(percentile_cont(0.5) WITHIN GROUP (ORDER BY total_cost_pct)::numeric, 2) AS med_total
+    FROM cost_probes WHERE ts > now() - make_interval(hours => ${hours})`;
+}

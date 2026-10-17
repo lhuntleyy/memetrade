@@ -252,6 +252,25 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
             p(`**OOS delay terpilih:** ${st(wf.oos)} · **OOS masuk 0,5 menit:** ${st(wf.oosDelay0)}`);
           }
         }
+        // ---- biaya terukur dari cost probe ----
+        const costs = (await db`
+          SELECT CASE WHEN liquidity_usd < 10000 THEN '< $10rb' WHEN liquidity_usd < 30000 THEN '$10–30rb'
+                      WHEN liquidity_usd < 50000 THEN '$30–50rb' WHEN liquidity_usd < 100000 THEN '$50–100rb'
+                      ELSE '≥ $100rb' END AS bucket, min(liquidity_usd) AS lo, count(*)::int AS n,
+                 round(percentile_cont(0.5) WITHIN GROUP (ORDER BY total_cost_pct)::numeric, 2) AS med,
+                 round(percentile_cont(0.75) WITHIN GROUP (ORDER BY total_cost_pct)::numeric, 2) AS p75
+          FROM cost_probes WHERE error IS NULL AND liquidity_usd IS NOT NULL
+            AND ts > now() - make_interval(hours => ${hours})
+          GROUP BY 1 ORDER BY lo`) as { bucket: string; n: number; med: number; p75: number }[];
+        p("");
+        p("## Biaya eksekusi terukur (cost probe: quote beli → jual Jupiter, termasuk biaya jaringan)");
+        p("");
+        if (costs.length) {
+          p("| Likuiditas | probe | median round-trip | p75 |");
+          p("|---|---|---|---|");
+          for (const c of costs) p(`| ${c.bucket} | ${c.n} | ${c.med}% | ${c.p75}% |`);
+        } else p("_Belum ada data probe._");
+
         // ---- sensitivitas biaya: apakah ada edge yang cuma termakan biaya? ----
         p("");
         p("## Sensitivitas biaya (masuk 0,5 menit setelah trigger, tanpa filter)");

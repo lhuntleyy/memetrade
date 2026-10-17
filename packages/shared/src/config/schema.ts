@@ -252,6 +252,22 @@ export const TradeConfig = z
           })
           .strict()
           .default({ enabled: true, interval_ms: 4000, max_staleness_ms: 20000, budget_per_min: 35 }),
+        /** pengukuran biaya eksekusi nyata (quote beli → jual) untuk token yang baru dievaluasi */
+        cost_probe: z
+          .object({
+            enabled: z.boolean(),
+            interval_sec: num.positive(),
+            size_sol: num.positive(),
+            /** sumber trigger yang di-probe (prefix) */
+            sources: z.array(z.string()).min(1),
+          })
+          .strict()
+          .default({
+            enabled: true,
+            interval_sec: 60,
+            size_sol: 0.1,
+            sources: ["pumpportal.migration", "dexscreener.", "wallet."],
+          }),
         confirm_timeout_ms: num.int().positive(),
       })
       .strict(),

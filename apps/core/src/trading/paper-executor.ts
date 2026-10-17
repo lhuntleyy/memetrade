@@ -307,6 +307,30 @@ export class PaperExecutor {
     return { grossSol: gross, netSol: gross - this.networkFeeSol("exit", false) + rent };
   }
 
+  /**
+   * Probe biaya round-trip: quote beli `sizeSol` SOL → token, lalu quote jual token itu → SOL.
+   * Mengembalikan angka mentah; perhitungan persen di `roundTripCost`.
+   */
+  async probeRoundTrip(mint: string, sizeSol: number) {
+    const lamportsIn = BigInt(Math.round(sizeSol * LAMPORTS));
+    const buy = await this.quote(SOL_MINT, mint, lamportsIn);
+    if (!buy?.outAmount) return { ok: false as const, error: "quote_beli_gagal" };
+    const sell = await this.quote(mint, SOL_MINT, BigInt(buy.outAmount));
+    if (!sell?.outAmount) return { ok: false as const, error: "quote_jual_gagal" };
+    const decimals = await this.tokenDecimals(mint);
+    const pct = (v?: string) => (toNum(v) !== null ? Number(v) * 100 : null);
+    return {
+      ok: true as const,
+      tokensOut: Number(buy.outAmount) / 10 ** decimals,
+      solBack: Number(sell.outAmount) / LAMPORTS,
+      buyImpactPct: pct(buy.priceImpactPct),
+      sellImpactPct: pct(sell.priceImpactPct),
+      feeBps: buy.feeBps ?? null,
+      router: buy.router ?? null,
+      networkSol: this.networkFeeSol("entry", false) + this.networkFeeSol("exit", false),
+    };
+  }
+
   /** Estimasi biaya exit (%) untuk monitoring PnL tiap tick tanpa memanggil API. */
   estimateExitCostPct(mint: string, tokens: number): number {
     const m = this.market(mint);

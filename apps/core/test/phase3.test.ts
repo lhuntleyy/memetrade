@@ -150,3 +150,15 @@ describe("risk manager", () => {
     );
   });
 });
+
+describe("cost probe", () => {
+  test("biaya round-trip = selisih quote + biaya jaringan", async () => {
+    const { roundTripCost } = await import("../src/research/cost-probe.ts");
+    // 0.1 SOL masuk, kembali 0.098 SOL; jaringan 0.00041 SOL
+    expect(roundTripCost(0.1, 0.098, 0.00041)).toEqual({
+      quoteCostPct: 2,
+      networkCostPct: 0.41,
+      totalCostPct: 2.41,
+    });
+  });
+});

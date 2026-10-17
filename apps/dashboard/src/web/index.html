@@ -171,6 +171,9 @@
           <button type="submit">Jalankan</button>
         </form>
         <p class="muted">Replay exit engine yang sama dengan paper trading di atas tick rekaman (sudah difilter spike). Entry = tick pertama ±1 dtk setelah keputusan. Sel = expectancy %/trade setelah biaya (win rate).</p>
+        <h2>Biaya eksekusi terukur (quote Jupiter beli → jual, 24 jam)</h2>
+        <p class="muted">Pakai angka ini untuk kolom "Biaya entry/exit %" (setengah dari total round-trip). Quote jual dihitung di pool sebelum beli kita → sedikit melebihkan impact (konservatif).</p>
+        <div id="bt-costs" class="scroll"></div>
         <div id="bt-result"></div>
       </section>
 

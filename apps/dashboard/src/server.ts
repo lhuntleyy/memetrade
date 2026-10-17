@@ -4,6 +4,8 @@ import { loadReplayData, runReplay, sweepTpSl, walkForward } from "../../core/sr
 import { createAuth, LOGIN_PAGE } from "./auth.ts";
 import {
   closedPositions,
+  costByLiquidity,
+  costProbeCounts,
   counts,
   equityCurve,
   exitReasons,
@@ -271,6 +273,11 @@ const server = Bun.serve({
     "/api/config/:kind/versions": guard((req) => coreProxy(req, "/config/:kind/versions")),
     "/api/config/:kind/versions/:id": guard((req) => coreProxy(req, "/config/:kind/versions/:id")),
     "/api/config/:kind/rollback/:id": { POST: guard((req) => coreProxy(req, "/config/:kind/rollback/:id")) },
+    "/api/costs": guard(async (req) => {
+      const hours = clampInt(new URL(req.url).searchParams.get("hours"), 24, 1, 24 * 30);
+      const [buckets, [counts]] = await Promise.all([costByLiquidity(db, hours), costProbeCounts(db, hours)]);
+      return Response.json({ buckets, counts });
+    }),
     "/api/system/events": guard(async () =>
       Response.json(
         await db`SELECT ts, level, service, kind, message, data FROM system_events

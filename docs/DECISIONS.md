@@ -101,3 +101,7 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 
 ### ADR-024 · 2026-10-17 · accepted — Walk-forward sebagai syarat sebelum mengubah exit
 - Perubahan TP/SL hanya diterapkan kalau unggul di out-of-sample walk-forward, bukan sekadar sel terbaik di sweep.
+
+### ADR-025 · 2026-10-17 · accepted — Fokus token likuid, ukur biaya asli
+- Hasil analisa: edge migrasi/DexScreener hanya muncul di biaya round-trip rendah; token baru negatif di semua kondisi → `explore_new_token` dimatikan, profile lain wajib likuiditas tinggi & tolak serial deployer.
+- Biaya eksekusi tidak lagi diasumsikan: cost probe mengukur quote beli→jual Jupiter per likuiditas; backtest/analisa memakai angka terukur.

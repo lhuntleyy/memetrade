@@ -563,7 +563,23 @@ document.addEventListener("click", async (ev) => {
 
 // ---------- backtest ----------
 let btProfilesLoaded = false;
+async function loadCosts() {
+  const { buckets, counts } = await getJson<{ buckets: Row[]; counts: Row }>("/api/costs?hours=24");
+  $("#bt-costs").innerHTML = buckets.length
+    ? `<table><thead><tr><th>Likuiditas</th><th>probe</th><th>median total</th><th>p75 total</th><th>median quote (fee+impact)</th><th>jaringan</th></tr></thead><tbody>
+      ${buckets
+        .map(
+          (b) =>
+            `<tr><td>${esc(b.bucket)}</td><td>${num(b.n)}</td><td><b>${num(b.med_total)}%</b></td><td>${num(b.p75_total)}%</td><td>${num(b.med_quote)}%</td><td>${num(b.network)}%</td></tr>`,
+        )
+        .join(
+          "",
+        )}</tbody></table><p class="muted">${counts.total} probe (${counts.failed} gagal), median total ${counts.med_total ?? "–"}%.</p>`
+    : `<p class="muted">Belum ada probe — jalan otomatis tiap 60 dtk untuk token yang baru dievaluasi.</p>`;
+}
+
 async function initBacktest() {
+  void loadCosts();
   if (btProfilesLoaded) return;
   const f = await getJson<{ funnel: Row[] }>("/api/pipeline?hours=168");
   const sel = $<HTMLSelectElement>("#bt-profile");
