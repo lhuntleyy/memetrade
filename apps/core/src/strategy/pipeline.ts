@@ -31,6 +31,8 @@ interface Job {
   attempts: number;
   /** jumlah evaluasi ulang yang sudah dilakukan (profile dengan reeval_interval_sec) */
   evals: number;
+  /** fitur tambahan yang dibawa trigger (mis. smart_confluence_count) */
+  extra: Features;
 }
 
 export interface PipelineDeps {
@@ -94,6 +96,7 @@ export class Pipeline {
   private onTrigger(e: EventOf<"TokenTriggered">) {
     if (this.stopped || (e.payload as { backlog?: boolean } | null)?.backlog) return;
     const key = `${e.source}.${e.kind}`;
+    const extra = ((e.payload as { features?: Features } | null)?.features ?? {}) as Features;
     for (const [name, p] of Object.entries(this.d.strategy().profiles)) {
       if (p.mode === "off" || !p.triggers.includes(key)) continue;
       this.stats.scheduled++;
@@ -104,6 +107,7 @@ export class Pipeline {
         triggerTs: e.ts,
         attempts: 0,
         evals: 0,
+        extra,
       };
       this.later(() => this.enqueue(job), p.wait_after_trigger_sec * 1000);
     }
@@ -180,7 +184,12 @@ export class Pipeline {
       this.gmgnCached(job.mint),
     ]);
     // GMGN dulu untuk distribusi holder (top10/bundler/sniper), DexScreener untuk pasar, Jupiter untuk holders/organic
-    const features: Features = mergeFeatures(dexFeatures(pair, now), gmgnFeatures(gm), jupiterFeatures(jup));
+    const features: Features = mergeFeatures(
+      job.extra,
+      dexFeatures(pair, now),
+      gmgnFeatures(gm),
+      jupiterFeatures(jup),
+    );
     const gmReasons = gmgnSecurityReasons(gm);
     const sec = {
       ...secOnchain,

@@ -31,6 +31,25 @@ wallet_tracker:
   min_interval_sec: 6        # holders berbobot 5 = satu bucket penuh GMGN free
   rescan_after_min: 360
   delay_sec: 120
+  # Skor wallet (0–100): win share token, token pump ≥+50%, bebas rug, total profit, tag GMGN.
+  # Wallet dengan skor ≥ min_score (dan sampel ≥ min_tokens token) otomatis masuk watchlist (maks auto_watch_top).
+  scoring:
+    lookback_days: 7
+    min_tokens: 3
+    min_score: 60
+    auto_watch_top: 50
+    refresh_min: 15
+  # Konfluensi → trigger "wallet.smart_confluence" untuk profile smart_money
+  confluence:
+    enabled: true
+    min_wallets: 2           # minimal 2 wallet bagus beli token yang sama
+    window_min: 30           # dalam 30 menit terakhir
+    rescan_after_min: 5      # token dengan 1 wallet bagus di-scan ulang tiap 5 menit
+    rescan_max: 3
+    activity_poll:           # pantau pembelian terbaru wallet watchlist (GMGN wallet_activity bobot 3)
+      enabled: true
+      polls_per_min: 6
+      max_wallets: 30
 
 meteora:
   enabled: false

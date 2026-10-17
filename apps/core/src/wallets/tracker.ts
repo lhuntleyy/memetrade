@@ -1,6 +1,7 @@
 import { type Db, pgTextArray } from "@memebot/db";
 import { type EventBus, type Logger, type SourcesConfig, TtlSet, toNum } from "@memebot/shared";
 import type { GmgnClient, GmgnHolder } from "../enrich/gmgn.ts";
+import type { ConfluenceDetector } from "./confluence.ts";
 
 /**
  * Wallet tracker: untuk token yang dievaluasi pipeline, ambil top holder dari GMGN lalu catat
@@ -22,6 +23,8 @@ export interface WalletObservation {
   profit_usd: number | null;
   tags: string[];
   maker_tags: string[];
+  /** kapan wallet mulai memegang token (GMGN start_holding_at) */
+  holding_since: Date | null;
 }
 
 /** Akun yang bukan wallet trader (pool, bonding curve, exchange/CEX, program). */
@@ -55,6 +58,7 @@ export function classifyHolders(
       profit_usd: toNum(h.profit),
       tags: h.tags ?? [],
       maker_tags: h.maker_token_tags ?? [],
+      holding_since: toNum(h.start_holding_at) ? new Date(Number(h.start_holding_at) * 1000) : null,
     };
     if (i < cfg.top_n) out.push({ ...base, kind: "top_holder", rank: i + 1, buy_tier_usd: null });
     const buy = toNum(h.buy_volume_cur) ?? 0;
@@ -66,6 +70,10 @@ export function classifyHolders(
 
 export class WalletTracker {
   private queue: { mint: string; dueAt: number }[] = [];
+  /** jumlah rescan per mint (token dengan wallet bagus) */
+  private rescans = new Map<string, number>();
+  /** diisi setelah konstruksi (hindari dependensi melingkar) */
+  confluence: ConfluenceDetector | null = null;
   private queued = new Set<string>();
   private seen: TtlSet;
   private timer: Timer;
@@ -89,8 +97,9 @@ export class WalletTracker {
     this.timer = setInterval(() => void this.tick(), 1000);
   }
 
-  enqueue(mint: string, delaySec = this.cfg().delay_sec) {
-    if (!this.cfg().enabled || this.queued.has(mint) || !this.seen.add(mint)) return;
+  enqueue(mint: string, delaySec = this.cfg().delay_sec, force = false) {
+    if (!this.cfg().enabled || this.queued.has(mint)) return;
+    if (!force && !this.seen.add(mint)) return;
     this.queued.add(mint);
     this.queue.push({ mint, dueAt: Date.now() + delaySec * 1000 });
     this.stats.queue = this.queue.length;
@@ -113,6 +122,7 @@ export class WalletTracker {
       if (!holders) throw new Error("tidak ada data holder");
       const obs = classifyHolders(job.mint, holders, cfg);
       await this.save(job.mint, obs);
+      await this.checkConfluence(job.mint, obs);
       this.stats.scanned++;
       this.stats.observations += obs.length;
     } catch (err) {
@@ -121,6 +131,30 @@ export class WalletTracker {
     } finally {
       this.busy = false;
     }
+  }
+
+  /** Wallet bagus di antara holder yang baru beli → konfluensi; kalau baru 1, jadwalkan scan ulang. */
+  private async checkConfluence(mint: string, obs: WalletObservation[]) {
+    const det = this.confluence;
+    const c = this.cfg().confluence;
+    if (!det || !c.enabled) return;
+    const windowMs = c.window_min * 60_000;
+    const now = Date.now();
+    const seen = new Set<string>();
+    for (const o of obs) {
+      if (seen.has(o.wallet) || !det.isGood(o.wallet)) continue;
+      seen.add(o.wallet);
+      // pakai waktu mulai pegang kalau ada; kalau tidak diketahui, anggap baru (snapshot sekarang)
+      const ts = o.holding_since ? o.holding_since.getTime() : now;
+      if (now - ts <= windowMs) await det.recordBuy(mint, o.wallet, ts, "holder_scan");
+    }
+    const n = det.goodCount(mint);
+    const done = this.rescans.get(mint) ?? 0;
+    if (n >= 1 && n < c.min_wallets && done < c.rescan_max) {
+      this.rescans.set(mint, done + 1);
+      this.enqueue(mint, c.rescan_after_min * 60, true);
+    }
+    if (this.rescans.size > 5000) this.rescans.delete(this.rescans.keys().next().value!);
   }
 
   private async save(mint: string, obs: WalletObservation[]) {

@@ -132,6 +132,16 @@ export class GmgnClient {
     return data?.list ?? null;
   }
 
+  /** Pembelian terbaru sebuah wallet (bobot 3). */
+  async walletBuys(wallet: string, limit = 20): Promise<unknown[] | null> {
+    const data = await this.get<{ activities?: unknown[] }>(
+      "/v1/user/wallet_activity",
+      { chain: "sol", wallet_address: wallet, type: "buy", limit: String(limit) },
+      3,
+    );
+    return data?.activities ?? null;
+  }
+
   async token(mint: string): Promise<GmgnData> {
     const q = { chain: "sol", address: mint };
     // berurutan (bukan paralel) supaya tidak meledakkan bucket 5/5

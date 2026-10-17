@@ -332,6 +332,44 @@ export const SourcesConfig = z
         rescan_after_min: num.positive(),
         /** tunggu setelah token dievaluasi sebelum scan (dtk) — biar holder terbentuk */
         delay_sec: num.min(0),
+        /** skor wallet → watchlist otomatis */
+        scoring: z
+          .object({
+            lookback_days: num.positive(),
+            min_tokens: num.int().positive(),
+            min_score: num.min(0).max(100),
+            auto_watch_top: num.int().positive(),
+            refresh_min: num.positive(),
+          })
+          .strict()
+          .default({ lookback_days: 7, min_tokens: 3, min_score: 60, auto_watch_top: 50, refresh_min: 15 }),
+        /** konfluensi: ≥ min_wallets wallet bagus membeli token yang sama dalam window_min */
+        confluence: z
+          .object({
+            enabled: z.boolean(),
+            min_wallets: num.int().min(2),
+            window_min: num.positive(),
+            /** token dengan ≥1 wallet bagus di-scan ulang setelah N menit (maks rescan_max kali) */
+            rescan_after_min: num.positive(),
+            rescan_max: num.int().min(0),
+            /** polling pembelian terbaru wallet watchlist (GMGN wallet_activity, bobot 3) */
+            activity_poll: z
+              .object({
+                enabled: z.boolean(),
+                polls_per_min: num.positive(),
+                max_wallets: num.int().positive(),
+              })
+              .strict(),
+          })
+          .strict()
+          .default({
+            enabled: true,
+            min_wallets: 2,
+            window_min: 30,
+            rescan_after_min: 5,
+            rescan_max: 3,
+            activity_poll: { enabled: true, polls_per_min: 6, max_wallets: 30 },
+          }),
       })
       .strict()
       .default({
@@ -342,6 +380,15 @@ export const SourcesConfig = z
         min_interval_sec: 6,
         rescan_after_min: 360,
         delay_sec: 120,
+        scoring: { lookback_days: 7, min_tokens: 3, min_score: 60, auto_watch_top: 50, refresh_min: 15 },
+        confluence: {
+          enabled: true,
+          min_wallets: 2,
+          window_min: 30,
+          rescan_after_min: 5,
+          rescan_max: 3,
+          activity_poll: { enabled: true, polls_per_min: 6, max_wallets: 30 },
+        },
       }),
     tracker: z
       .object({

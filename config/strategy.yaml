@@ -113,6 +113,25 @@ profiles:
     entry: { size_sol: 0.05, max_price_impact_pct: 3.0 }
     exits: { ref: exits.quick_flip }
 
+  # ---------------- smart money (konfluensi wallet bagus) ----------------
+  # Trigger: ≥2 wallet berskor tinggi (atau dipantau manual) membeli token yang sama dalam 30 menit
+  # (dari scan holder GMGN + polling aktivitas wallet). Lihat sources.yaml → wallet_tracker.
+  smart_money:
+    mode: paper
+    bucket_pct: 5
+    triggers: [wallet.smart_confluence]
+    wait_after_trigger_sec: 5
+    filters:
+      - { field: smart_confluence_count, op: gte,     value: 2 }
+      - { field: liquidity_usd,          op: gte,     value: 10000 }
+      - { field: mcap_usd,               op: between, value: [20000, 10000000] }
+      - { field: holders,                op: gte,     value: 100 }
+      - { field: dev_hold_pct,           op: lte,     value: 10, on_null: ignore }
+      - { field: top10_pct,              op: lte,     value: 40, on_null: ignore }
+      - { field: bundler_pct,            op: lte,     value: 50, on_null: ignore }
+    entry: { size_sol: 0.1, max_price_impact_pct: 3.0 }
+    exits: { ref: exits.quick_flip }
+
 exits:
   # Gaya user: ambil untung 20–30% lalu JUAL SEMUA (tanpa jual bertahap / moonbag).
   #  - sentuh +30%  → jual 100% (take profit)

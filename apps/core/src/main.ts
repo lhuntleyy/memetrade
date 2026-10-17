@@ -21,6 +21,8 @@ import { MarketTracker } from "./market/tracker.ts";
 import { Pipeline } from "./strategy/pipeline.ts";
 import { PaperExecutor } from "./trading/paper-executor.ts";
 import { PositionManager } from "./trading/position-manager.ts";
+import { ConfluenceDetector } from "./wallets/confluence.ts";
+import { refreshWalletScores } from "./wallets/scoring.ts";
 import { WalletTracker } from "./wallets/tracker.ts";
 
 const log = createLogger("core");
@@ -124,6 +126,32 @@ const wallets = gmgn
     )
   : null;
 if (!wallets) log.warn("wallet tracker nonaktif (GMGN_API_KEY tidak ada)");
+// ---- smart money: skor wallet berkala + deteksi konfluensi ----
+const confluence =
+  gmgn && wallets
+    ? new ConfluenceDetector(
+        () => configs.sources.data.wallet_tracker,
+        gmgn,
+        db,
+        bus,
+        log,
+        (m) => symbols.get(m) ?? null,
+      )
+    : null;
+if (wallets && confluence) wallets.confluence = confluence;
+const refreshScores = async () => {
+  try {
+    await refreshWalletScores(db, configs.sources.data.wallet_tracker.scoring, log);
+    await confluence?.refreshGood();
+  } catch (err) {
+    log.warn({ err: String(err) }, "refresh skor wallet gagal");
+  }
+};
+void refreshScores();
+const scoreTimer = setInterval(
+  () => void refreshScores(),
+  configs.sources.data.wallet_tracker.scoring.refresh_min * 60_000,
+);
 
 if (src.gmgn.enabled)
   log.warn(
@@ -171,6 +199,7 @@ const control = startControlServer({
     trading: positions.summary(),
     quotes: executor.quoteStats,
     wallets: wallets ? wallets.stats : "off",
+    smartMoney: confluence ? confluence.stats : "off",
   }),
   onControl: async (action, actor) => {
     await db`INSERT INTO control_events (actor, action) VALUES (${actor}, ${action})`;
@@ -266,6 +295,8 @@ async function shutdown(signal: string) {
   dexFeeds?.stop();
   positions.stop();
   wallets?.stop();
+  confluence?.stop();
+  clearInterval(scoreTimer);
   await pipeline.stop();
   await tracker.stop();
   await recorder.stop();
