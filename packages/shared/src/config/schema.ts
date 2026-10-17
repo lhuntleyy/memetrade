@@ -360,6 +360,16 @@ export const SourcesConfig = z
                 max_wallets: num.int().positive(),
               })
               .strict(),
+            /** feed transaksi real-time wallet bertag GMGN (smart money / KOL), bobot 1 */
+            gmgn_feeds: z
+              .object({
+                enabled: z.boolean(),
+                poll_sec: num.positive(),
+                min_usd: num.min(0),
+                feeds: z.array(z.enum(["smartmoney", "kol"])).min(1),
+              })
+              .strict()
+              .default({ enabled: true, poll_sec: 15, min_usd: 100, feeds: ["smartmoney", "kol"] }),
           })
           .strict()
           .default({
@@ -369,6 +379,7 @@ export const SourcesConfig = z
             rescan_after_min: 5,
             rescan_max: 3,
             activity_poll: { enabled: true, polls_per_min: 6, max_wallets: 30 },
+            gmgn_feeds: { enabled: true, poll_sec: 15, min_usd: 100, feeds: ["smartmoney", "kol"] },
           }),
       })
       .strict()
@@ -388,6 +399,7 @@ export const SourcesConfig = z
           rescan_after_min: 5,
           rescan_max: 3,
           activity_poll: { enabled: true, polls_per_min: 6, max_wallets: 30 },
+          gmgn_feeds: { enabled: true, poll_sec: 15, min_usd: 100, feeds: ["smartmoney", "kol"] },
         },
       }),
     tracker: z

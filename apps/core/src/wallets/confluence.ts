@@ -1,7 +1,7 @@
 import type { Db } from "@memebot/db";
 import { pgTextArray } from "@memebot/db";
-import type { EventBus, Logger, SourcesConfig } from "@memebot/shared";
-import type { GmgnClient } from "../enrich/gmgn.ts";
+import { type EventBus, type Logger, type SourcesConfig, toNum } from "@memebot/shared";
+import type { GmgnClient, GmgnFeedTrade } from "../enrich/gmgn.ts";
 import { loadGoodWallets } from "./scoring.ts";
 
 /**
@@ -63,11 +63,24 @@ interface GmgnActivity {
 export class ConfluenceDetector {
   private window: ConfluenceWindow;
   private good = new Map<string, number | null>();
+  /** wallet bertag GMGN (smart_degen / renowned / kol) yang terlihat di feed — dianggap tepercaya */
+  private trusted = new Map<string, { tags: string[]; seenAt: number }>();
+  private seenTx = new Set<string>();
+  private feedBusy = false;
   private lastSeen = new Map<string, number>();
   private rr = 0;
   private timers: Timer[] = [];
   private polling = false;
-  stats = { goodWallets: 0, buysSeen: 0, signals: 0, polls: 0, pollFailed: 0 };
+  stats = {
+    goodWallets: 0,
+    trustedFeedWallets: 0,
+    buysSeen: 0,
+    signals: 0,
+    polls: 0,
+    pollFailed: 0,
+    feedPolls: 0,
+    feedBuys: 0,
+  };
 
   constructor(
     private readonly cfg: () => SourcesConfig["wallet_tracker"],
@@ -84,6 +97,7 @@ export class ConfluenceDetector {
     this.timers.push(setInterval(() => this.window.prune(), 60_000));
     const pollMs = Math.max(2000, 60_000 / c.activity_poll.polls_per_min);
     this.timers.push(setInterval(() => void this.pollNext(), pollMs));
+    this.timers.push(setInterval(() => void this.pollFeeds(), c.gmgn_feeds.poll_sec * 1000));
   }
 
   async refreshGood() {
@@ -96,13 +110,18 @@ export class ConfluenceDetector {
   }
 
   isGood(wallet: string) {
-    return this.good.has(wallet);
+    return this.good.has(wallet) || this.trusted.has(wallet);
   }
 
   /** Catat satu pembelian wallet. Kalau konfluensi tercapai → trigger + simpan sinyal. */
-  async recordBuy(mint: string, wallet: string, ts: number, source: "holder_scan" | "wallet_activity") {
+  async recordBuy(
+    mint: string,
+    wallet: string,
+    ts: number,
+    source: "holder_scan" | "wallet_activity" | "gmgn_feed",
+  ) {
     const c = this.cfg().confluence;
-    if (!c.enabled || !this.good.has(wallet)) return;
+    if (!c.enabled || !this.isGood(wallet)) return;
     this.stats.buysSeen++;
     const wallets = this.window.add(mint, wallet, ts);
     if (!wallets) return;
@@ -135,6 +154,42 @@ export class ConfluenceDetector {
   /** Jumlah wallet bagus yang sedang tercatat membeli mint ini (untuk keputusan rescan). */
   goodCount(mint: string) {
     return this.window.count(mint);
+  }
+
+  /** Poll feed smart money / KOL GMGN → pembelian wallet bertag dianggap tepercaya. */
+  private async pollFeeds() {
+    const c = this.cfg().confluence;
+    if (!c.enabled || !c.gmgn_feeds.enabled || this.feedBusy || this.gmgn.pausedForSec > 0) return;
+    this.feedBusy = true;
+    try {
+      for (const feed of c.gmgn_feeds.feeds) {
+        const list = await this.gmgn.trackFeed(feed, 50).catch(() => null);
+        this.stats.feedPolls++;
+        if (list) await this.ingestFeed(feed, list, c.gmgn_feeds.min_usd);
+      }
+      if (this.seenTx.size > 20_000) this.seenTx = new Set([...this.seenTx].slice(-5000));
+      for (const [w, v] of this.trusted) if (Date.now() - v.seenAt > 24 * 3600_000) this.trusted.delete(w);
+      this.stats.trustedFeedWallets = this.trusted.size;
+    } finally {
+      this.feedBusy = false;
+    }
+  }
+
+  /** Proses satu halaman feed (dipisah supaya bisa dites). */
+  async ingestFeed(feed: "smartmoney" | "kol", list: GmgnFeedTrade[], minUsd: number) {
+    for (const t of list) {
+      const tx = t.transaction_hash;
+      const wallet = t.maker;
+      const mint = t.base_address;
+      if (!tx || !wallet || !mint || t.side !== "buy" || this.seenTx.has(tx)) continue;
+      this.seenTx.add(tx);
+      if ((toNum(t.amount_usd) ?? 0) < minUsd) continue;
+      const tags = [...(t.maker_info?.tags ?? [])];
+      if (feed === "kol" && !tags.includes("kol")) tags.push("kol");
+      this.trusted.set(wallet, { tags, seenAt: Date.now() });
+      this.stats.feedBuys++;
+      await this.recordBuy(mint, wallet, (t.timestamp ?? 0) * 1000, "gmgn_feed");
+    }
   }
 
   private async pollNext() {

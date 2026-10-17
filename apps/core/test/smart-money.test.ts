@@ -46,3 +46,48 @@ test("konfluensi: pembelian di luar window tidak dihitung", () => {
   expect(w.add("M", "B", now, now)).toBeNull();
   expect(w.count("M", now)).toBe(1);
 });
+
+test("feed GMGN: 2 wallet smart_degen beli token sama → trigger smart_confluence; tx dobel & kecil diabaikan", async () => {
+  const { EventBus, SourcesConfig } = await import("@memebot/shared");
+  const { ConfluenceDetector } = await import("../src/wallets/confluence.ts");
+  const fakeDb = ((..._a: unknown[]) => Promise.resolve([])) as never; // semua query → []
+  const bus = new EventBus();
+  const triggers: unknown[] = [];
+  bus.on("TokenTriggered", (e) => void triggers.push(e));
+  const cfg = SourcesConfig.shape.wallet_tracker.parse(undefined);
+  const det = new ConfluenceDetector(
+    () => cfg,
+    { pausedForSec: 0 } as never,
+    fakeDb,
+    bus,
+    console as never,
+    () => "PEP",
+  );
+  const now = Math.floor(Date.now() / 1000);
+  const trade = (tx: string, maker: string, usd: number) => ({
+    transaction_hash: tx,
+    maker,
+    side: "buy",
+    amount_usd: usd,
+    timestamp: now,
+    base_address: "MintPepper",
+    maker_info: { tags: ["smart_degen"] },
+  });
+  await det.ingestFeed(
+    "smartmoney",
+    [trade("t1", "A", 248), trade("t1", "A", 248), trade("t2", "B", 50)],
+    100,
+  );
+  expect(triggers.length).toBe(0); // B di bawah min_usd, t1 dobel
+  await det.ingestFeed("smartmoney", [trade("t3", "C", 500)], 100);
+  det.stop();
+  expect(triggers.length).toBe(1);
+  const e = triggers[0] as {
+    source: string;
+    kind: string;
+    payload: { features: { smart_confluence_count: number } };
+  };
+  expect(e.source).toBe("wallet");
+  expect(e.kind).toBe("smart_confluence");
+  expect(e.payload.features.smart_confluence_count).toBe(2);
+});

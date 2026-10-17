@@ -132,6 +132,16 @@ export class GmgnClient {
     return data?.list ?? null;
   }
 
+  /** Feed transaksi wallet bertag GMGN: smartmoney / kol (bobot 1), hanya beli. */
+  async trackFeed(feed: "smartmoney" | "kol", limit = 50): Promise<GmgnFeedTrade[] | null> {
+    const data = await this.get<{ list?: GmgnFeedTrade[] }>(`/v1/user/${feed}`, {
+      chain: "sol",
+      side: "buy",
+      limit: String(limit),
+    });
+    return data?.list ?? null;
+  }
+
   /** Pembelian terbaru sebuah wallet (bobot 3). */
   async walletBuys(wallet: string, limit = 20): Promise<unknown[] | null> {
     const data = await this.get<{ activities?: unknown[] }>(
@@ -149,6 +159,18 @@ export class GmgnClient {
     const security = await this.get<GmgnSecurity>("/v1/token/security", q).catch(() => null);
     return { info, security };
   }
+}
+
+/** Satu transaksi dari feed smartmoney/kol (bentuk asli dicek 2026-10-17). */
+export interface GmgnFeedTrade {
+  transaction_hash?: string;
+  maker?: string;
+  side?: string;
+  amount_usd?: number | string;
+  timestamp?: number;
+  base_address?: string;
+  base_token?: { symbol?: string; launchpad?: string };
+  maker_info?: { tags?: string[]; name?: string; twitter_username?: string };
 }
 
 export interface GmgnHolder {

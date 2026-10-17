@@ -14,10 +14,12 @@ import {
   pipelineFunnel,
   recentTriggers,
   rejectReasons,
+  smartSignals,
   tokenDetail,
   tradingKpi,
   walletDetail,
   walletLeaderboard,
+  watchSummary,
 } from "./queries.ts";
 import index from "./web/index.html";
 
@@ -159,6 +161,11 @@ const server = Bun.serve({
       const kindParam = u.searchParams.get("kind") ?? "all";
       const kind = ["all", "top_holder", "big_buyer"].includes(kindParam) ? kindParam : "all";
       return Response.json(await walletLeaderboard(db, hours, minTier, kind, 200));
+    }),
+    "/api/smart-signals": guard(async (req) => {
+      const hours = clampInt(new URL(req.url).searchParams.get("hours"), 24, 1, 24 * 30);
+      const [signals, [summary]] = await Promise.all([smartSignals(db, hours), watchSummary(db)]);
+      return Response.json({ signals, summary });
     }),
     "/api/wallets/:address": guard(async (req) => {
       const a = (req as Request & { params: { address: string } }).params.address;

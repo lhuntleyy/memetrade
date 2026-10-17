@@ -287,3 +287,9 @@ pre.features {
   padding: 8px 12px;
   max-width: 320px;
 }
+h3.sub {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+  margin: 16px 0 6px;
+}

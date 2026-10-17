@@ -50,6 +50,11 @@ wallet_tracker:
       enabled: true
       polls_per_min: 6
       max_wallets: 30
+    gmgn_feeds:              # pembelian real-time wallet bertag GMGN (smart_degen / KOL) — dianggap tepercaya
+      enabled: true
+      poll_sec: 15
+      min_usd: 100           # abaikan pembelian kecil
+      feeds: [smartmoney, kol]
 
 meteora:
   enabled: false

@@ -181,10 +181,20 @@
           Min beli:
           <select id="w-tier"><option value="0">–</option><option value="500">≥ $500</option><option value="1000">≥ $1000</option></select>
         </div>
-        <p class="muted">Wallet yang muncul sebagai top holder (tanpa pool/exchange) atau pembeli besar di token yang dievaluasi bot. Data GMGN. Wallet "dev" = creator/dev team token tsb.</p>
+        <h2>Smart money</h2>
+        <div id="smart-summary" class="grid"></div>
+        <h3 class="sub">Sinyal konfluensi (≥2 wallet bagus beli token yang sama)</h3>
+        <div class="scroll">
+          <table id="smart-signals">
+            <thead><tr><th>Waktu</th><th>Token</th><th>Sumber</th><th>Wallet</th><th>Skor rata-rata</th><th>Filter</th><th>Posisi</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h2>Papan wallet</h2>
+        <p class="muted">Wallet yang muncul sebagai top holder (tanpa pool/exchange) atau pembeli besar di token yang dievaluasi bot. Data GMGN. Wallet "dev" = creator/dev team token tsb. Skor 0–100: win share, token pump, bebas rug, profit, tag (butuh ≥3 token).</p>
         <div class="scroll">
           <table id="wallets">
-            <thead><tr><th>Wallet</th><th>Token</th><th>Top holder</th><th>Pembeli besar</th><th>Total beli</th><th>Profit</th><th>Tag</th><th>Terakhir</th><th></th></tr></thead>
+            <thead><tr><th>Wallet</th><th>Skor</th><th>Token</th><th>Top holder</th><th>Pembeli besar</th><th>Total beli</th><th>Profit</th><th>Tag</th><th>Terakhir</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>

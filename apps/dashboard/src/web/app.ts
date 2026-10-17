@@ -463,15 +463,64 @@ async function loadWallets() {
         .map((w) => {
           const a = String(w.wallet);
           const tags = [...((w.tags as string[] | null) ?? []), ...(w.is_dev ? ["dev"] : [])];
+          const parts = (w.score_parts ?? {}) as Record<string, unknown>;
+          const scoreTitle = Object.entries(parts)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(", ");
+          const scoreCell =
+            w.score === null || w.score === undefined
+              ? `<span class="muted">–</span>`
+              : `<span class="${Number(w.score) >= 60 ? "up" : ""}" title="${esc(scoreTitle)}">${Number(w.score).toFixed(0)}</span>`;
           return `<tr><td><a href="#" data-wallet="${esc(a)}"><code>${esc(short(a))}</code></a></td>
+          <td>${scoreCell}</td>
           <td>${num(w.tokens)}</td><td>${num(w.as_top_holder)}</td><td>${num(w.as_big_buyer)}</td>
           <td>${usd(w.buy_usd)}</td><td>${usd(w.profit_usd)}</td>
           <td>${tags.map((t) => `<span class="tag${t === "smart_degen" ? " ok" : t === "dev" || t === "bundler" ? " bad" : ""}">${esc(t)}</span>`).join(" ")}</td>
           <td>${wib.format(new Date(String(w.last_seen)))}</td>
-          <td><button type="button" class="btn small" data-watch="${esc(a)}" data-on="${w.watched ? "0" : "1"}">${w.watched ? "★ dipantau" : "☆ pantau"}</button></td></tr>`;
+          <td><button type="button" class="btn small" data-watch="${esc(a)}" data-on="${w.watched ? "0" : "1"}">${w.watched ? (w.auto ? "★ otomatis" : "★ dipantau") : "☆ pantau"}</button></td></tr>`;
         })
         .join("")
-    : `<tr><td colspan="9" class="muted">Belum ada data — scan holder jalan ±2 menit setelah token dievaluasi.</td></tr>`;
+    : `<tr><td colspan="10" class="muted">Belum ada data — scan holder jalan ±2 menit setelah token dievaluasi.</td></tr>`;
+  await loadSmart();
+}
+
+const srcLabel: Record<string, string> = {
+  holder_scan: "scan holder",
+  wallet_activity: "aktivitas wallet",
+  gmgn_feed: "feed GMGN",
+  mixed: "campuran",
+};
+
+async function loadSmart() {
+  const { signals, summary } = await getJson<{ signals: Row[]; summary: Row }>(
+    `/api/smart-signals?hours=${$<HTMLSelectElement>("#w-hours").value}`,
+  );
+  $("#smart-summary").innerHTML =
+    card("Watchlist", null, [
+      ["otomatis (skor ≥ 60)", summary.auto_active],
+      ["manual", summary.manual_active],
+      ["wallet bernilai skor", summary.scored],
+      ["skor tertinggi", summary.max_score ?? "–"],
+    ]) + card("Sinyal", null, [["konfluensi (rentang ini)", signals.length]]);
+  $("#smart-signals tbody").innerHTML = signals.length
+    ? signals
+        .map((x) => {
+          const mint = String(x.mint);
+          const wallets = (x.wallets as string[]) ?? [];
+          const filter =
+            x.filter_passed === null || x.filter_passed === undefined
+              ? `<span class="muted">–</span>`
+              : x.filter_passed
+                ? `<span class="tag ok">lolos</span>`
+                : `<span class="tag bad">ditolak</span>`;
+          return `<tr><td>${wib.format(new Date(String(x.ts)))}</td>
+          <td>${x.symbol ? `<b>${esc(x.symbol)}</b> ` : ""}<a href="#" data-mint="${esc(mint)}"><code>${esc(short(mint))}</code></a></td>
+          <td>${esc(srcLabel[String(x.source)] ?? x.source)}</td>
+          <td>${wallets.map((w) => `<a href="#" data-wallet="${esc(w)}"><code>${esc(short(w))}</code></a>`).join(" ")}</td>
+          <td>${num(x.avg_score)}</td><td>${filter}</td><td>${num(x.position)}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="7" class="muted">Belum ada konfluensi.</td></tr>`;
 }
 
 async function loadWalletDetail(address: string) {

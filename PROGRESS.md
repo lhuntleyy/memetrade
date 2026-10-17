@@ -101,7 +101,7 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [ ] P5-07 ≥ 100 trade live → evaluasi
 
 ## Fase 6 — Scale
-- [~] P6-01 Wallet tracker (top holder & pembeli besar ≥$500/≥$1000 via GMGN, tab Wallet, watchlist) ✅; profile `smart_money` & scoring belum
+- [x] P6-01 Wallet tracker + skor wallet + konfluensi (scan holder, aktivitas wallet, feed GMGN smartmoney/KOL) + profile `smart_money` (paper) + dashboard skor & sinyal
 - [ ] P6-02 Profile `swing_dip` (+ backfill GeckoTerminal)
 - [ ] P6-03 Profile `near_graduation`
 - [ ] P6-04 Profile `kol_call` (mtcute userbot + caller scoring)
@@ -204,3 +204,10 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - Skor wallet 0–100 (`wallets/scoring.ts`, dites): win share token, token pump ≥+50%, bebas rug, total profit, tag GMGN; dev/creator = 0; sampel < 3 token = belum dinilai. Refresh tiap 15 menit → `watch_wallets` (auto, maks 50, skor ≥ 60). Data baru ±1 jam: 340 wallet, 55 punya skor, belum ada yang ≥ 60 (wajar, butuh beberapa hari).
 - Konfluensi (`wallets/confluence.ts`, dites): ≥2 wallet bagus beli token yang sama dalam 30 menit → trigger `wallet.smart_confluence` → profile `smart_money` (paper, 0,1 SOL). Sumber: scan holder (pakai `start_holding_at`, token dengan 1 wallet bagus di-scan ulang tiap 5 menit maks 3×) + polling `wallet_activity` wallet watchlist. Migrasi 0007 (skor, holding_since, smart_signals).
 - BELUM: sumber feed GMGN `smartmoney`/`kol` (bobot 1, real-time, sudah dicek bentuk datanya) — skrip penerapannya gagal di tengah, migrasi 0008 (constraint source `gmgn_feed`) sudah jalan tapi kodenya belum. Dashboard skor wallet & daftar sinyal konfluensi juga belum.
+
+### 2026-10-17 (lanjutan) — smart money selesai
+- Feed GMGN `/v1/user/smartmoney` & `/v1/user/kol` (bobot 1, side=buy, tiap 15 dtk, min $100): wallet bertag GMGN (smart_degen / KOL) dianggap tepercaya selama 24 jam → pembeliannya masuk jendela konfluensi bersama wallet berskor tinggi dari data kita. Dites (`ingestFeed`: tx dobel & pembelian kecil diabaikan, 2 wallet → trigger `wallet.smart_confluence`).
+- Dashboard tab Wallet: ringkasan watchlist (otomatis/manual, wallet bernilai skor, skor tertinggi), tabel sinyal konfluensi (sumber, wallet, skor rata-rata, hasil filter, posisi paper), kolom skor (hover = komponen) & badge ★ otomatis.
+- Setelah data bertambah: 769 wallet sudah punya skor, 1 wallet ≥ 60 (83,7) otomatis masuk watchlist.
+- 74 test pass, tsc & biome bersih.
+- Live: poll pertama feed GMGN → 17 pembelian dari 14 wallet bertag, 3 sinyal konfluensi (salah satunya melibatkan wallet berskor 83,7 dari data kita); semua lolos security tapi ditolak filter `smart_money` (likuiditas/mcap/holders kurang). Beban GMGN naik (feed + aktivitas + scan + pipeline) → sesekali 429, ditangani jeda otomatis.

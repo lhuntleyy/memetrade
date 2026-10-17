@@ -213,9 +213,12 @@ export function walletLeaderboard(db: Db, hours: number, minTier: number, kind: 
            max(p.ts) AS last_seen,
            bool_or(p.dev) AS is_dev,
            (SELECT array_agg(DISTINCT t) FROM wallet_observations w2, unnest(w2.tags) t WHERE w2.wallet = p.wallet) AS tags,
-           COALESCE((SELECT active FROM watch_wallets ww WHERE ww.address = p.wallet), false) AS watched
+           COALESCE((SELECT active FROM watch_wallets ww WHERE ww.address = p.wallet), false) AS watched,
+           (SELECT score_value FROM watch_wallets ww WHERE ww.address = p.wallet) AS score,
+           (SELECT score FROM watch_wallets ww WHERE ww.address = p.wallet) AS score_parts,
+           COALESCE((SELECT auto FROM watch_wallets ww WHERE ww.address = p.wallet), false) AS auto
     FROM per_token p GROUP BY p.wallet
-    ORDER BY tokens DESC, buy_usd DESC LIMIT ${limit}`;
+    ORDER BY score DESC NULLS LAST, tokens DESC, buy_usd DESC LIMIT ${limit}`;
 }
 
 export function walletDetail(db: Db, address: string) {
@@ -227,4 +230,29 @@ export function walletDetail(db: Db, address: string) {
     LEFT JOIN tokens k ON k.mint = o.mint
     LEFT JOIN LATERAL (SELECT max_ret, rugged FROM tracked_paths tp WHERE tp.mint = o.mint ORDER BY t0 LIMIT 1) p ON true
     WHERE o.wallet = ${address} ORDER BY o.ts DESC LIMIT 200`;
+}
+
+/** Sinyal konfluensi smart money + apakah lanjut jadi entry paper. */
+export function smartSignals(db: Db, hours: number) {
+  return db`
+    SELECT s.id, s.ts, s.mint, COALESCE(s.symbol, k.symbol) AS symbol, s.source, s.n_wallets, s.avg_score, s.wallets,
+           (SELECT d.passed FROM decisions d WHERE d.mint = s.mint AND d.profile = 'smart_money' AND d.stage = 'filter'
+              AND d.ts >= s.ts ORDER BY d.ts LIMIT 1) AS filter_passed,
+           (SELECT p.status || COALESCE(':' || round(p.pnl_pct::numeric, 1), '') FROM positions p
+              WHERE p.mint = s.mint AND p.profile = 'smart_money' AND p.opened_at >= s.ts - interval '1 minute'
+              ORDER BY p.id LIMIT 1) AS position
+    FROM smart_signals s LEFT JOIN tokens k ON k.mint = s.mint
+    WHERE s.ts > now() - make_interval(hours => ${hours})
+    ORDER BY s.ts DESC LIMIT 100`;
+}
+
+/** Ringkasan watchlist: jumlah wallet otomatis/manual & sebaran skor. */
+export function watchSummary(db: Db) {
+  return db`
+    SELECT count(*) FILTER (WHERE active AND auto)::int AS auto_active,
+           count(*) FILTER (WHERE active AND NOT auto)::int AS manual_active,
+           count(*) FILTER (WHERE score_value IS NOT NULL)::int AS scored,
+           count(*) FILTER (WHERE score_value >= 60)::int AS score_60,
+           round(max(score_value)::numeric, 1) AS max_score
+    FROM watch_wallets`;
 }

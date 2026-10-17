@@ -91,3 +91,6 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 
 ### ADR-021 · 2026-10-17 · accepted — Evaluasi ulang token dalam window
 - Token baru jarang memenuhi syarat di menit pertama. Profile bisa mengevaluasi ulang tiap `reeval_interval_sec` sampai `eval_window_sec`, dengan pre-check data gratis untuk menghemat kuota API berbayar/terbatas.
+
+### ADR-022 · 2026-10-17 · accepted — Smart money = skor sendiri + wallet bertag GMGN
+- Skor wallet deterministik dari data sendiri butuh berhari-hari untuk terbentuk, jadi wallet bertag GMGN (smart_degen/KOL) dari feed real-time ikut dihitung sebagai "wallet bagus" untuk konfluensi. Konfluensi = ≥2 wallet bagus berbeda membeli token yang sama dalam 30 menit; tetap lewat security + filter sebelum entry paper.
