@@ -16,6 +16,8 @@
         <button type="button" data-tab="feed">Live Feed</button>
         <button type="button" data-tab="lab">Trigger Lab</button>
         <button type="button" data-tab="pipeline">Pipeline</button>
+        <button type="button" data-tab="backtest">Backtest</button>
+        <button type="button" data-tab="wallets">Wallet</button>
         <button type="button" data-tab="token">Token</button>
       </nav>
       <span id="ws-dot" title="stream real-time">○</span>
@@ -150,6 +152,43 @@
             <tbody></tbody>
           </table>
         </div>
+      </section>
+
+      <section id="tab-backtest" class="tab">
+        <form id="bt-form" class="toolbar">
+          Profile <select id="bt-profile"><option value="all">semua</option></select>
+          Universe
+          <select id="bt-universe">
+            <option value="passed">lolos filter+security</option>
+            <option value="evaluated">semua yang dievaluasi (baseline)</option>
+          </select>
+          Rentang <select id="bt-hours"><option value="6">6 jam</option><option value="24" selected>24 jam</option><option value="72">3 hari</option><option value="168">7 hari</option></select>
+          TP <input id="bt-tps" value="15,20,25,30,40,50" size="14" />
+          SL <input id="bt-sls" value="10,15,20,30" size="10" />
+          Biaya entry/exit % <input id="bt-cost" value="1.5" size="3" />
+          <button type="submit">Jalankan</button>
+        </form>
+        <p class="muted">Replay exit engine yang sama dengan paper trading di atas tick rekaman (sudah difilter spike). Entry = tick pertama ±1 dtk setelah keputusan. Sel = expectancy %/trade setelah biaya (win rate).</p>
+        <div id="bt-result"></div>
+      </section>
+
+      <section id="tab-wallets" class="tab">
+        <div class="toolbar">
+          Rentang:
+          <select id="w-hours"><option value="6">6 jam</option><option value="24" selected>24 jam</option><option value="72">3 hari</option><option value="168">7 hari</option></select>
+          Jenis:
+          <select id="w-kind"><option value="all">semua</option><option value="top_holder">top holder</option><option value="big_buyer">pembeli besar</option></select>
+          Min beli:
+          <select id="w-tier"><option value="0">–</option><option value="500">≥ $500</option><option value="1000">≥ $1000</option></select>
+        </div>
+        <p class="muted">Wallet yang muncul sebagai top holder (tanpa pool/exchange) atau pembeli besar di token yang dievaluasi bot. Data GMGN. Wallet "dev" = creator/dev team token tsb.</p>
+        <div class="scroll">
+          <table id="wallets">
+            <thead><tr><th>Wallet</th><th>Token</th><th>Top holder</th><th>Pembeli besar</th><th>Total beli</th><th>Profit</th><th>Tag</th><th>Terakhir</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="wallet-detail"></div>
       </section>
 
       <section id="tab-token" class="tab">

@@ -185,3 +185,46 @@ export function equityCurve(db: Db, mode: string) {
     SELECT closed_at, sum(realized_pnl_sol) OVER (ORDER BY closed_at)::float AS equity
     FROM positions WHERE status = 'CLOSED' AND mode = ${mode} ORDER BY closed_at`;
 }
+
+// ---------------- wallet tracker ----------------
+
+/** Papan wallet: wallet yang paling sering muncul sebagai top holder / pembeli besar. */
+export function walletLeaderboard(db: Db, hours: number, minTier: number, kind: string, limit: number) {
+  return db`
+    WITH o AS (
+      SELECT * FROM wallet_observations
+      WHERE ts > now() - make_interval(hours => ${hours})
+        AND (${kind} = 'all' OR kind = ${kind})
+        AND (kind <> 'big_buyer' OR COALESCE(buy_tier_usd, 0) >= ${minTier})
+    ), per_token AS (
+      -- satu baris per (wallet, token): hindari dobel hitung kalau wallet top holder sekaligus pembeli besar
+      SELECT wallet, mint,
+             bool_or(kind = 'top_holder') AS top, bool_or(kind = 'big_buyer') AS big,
+             max(buy_volume_usd) AS buy_usd, max(profit_usd) AS profit_usd, max(ts) AS ts,
+             bool_or(maker_tags && ARRAY['creator', 'dev_team']) AS dev
+      FROM o GROUP BY wallet, mint
+    )
+    SELECT p.wallet,
+           count(*)::int AS tokens,
+           count(*) FILTER (WHERE p.top)::int AS as_top_holder,
+           count(*) FILTER (WHERE p.big)::int AS as_big_buyer,
+           round(COALESCE(sum(p.buy_usd), 0)::numeric, 0) AS buy_usd,
+           round(COALESCE(sum(p.profit_usd), 0)::numeric, 0) AS profit_usd,
+           max(p.ts) AS last_seen,
+           bool_or(p.dev) AS is_dev,
+           (SELECT array_agg(DISTINCT t) FROM wallet_observations w2, unnest(w2.tags) t WHERE w2.wallet = p.wallet) AS tags,
+           COALESCE((SELECT active FROM watch_wallets ww WHERE ww.address = p.wallet), false) AS watched
+    FROM per_token p GROUP BY p.wallet
+    ORDER BY tokens DESC, buy_usd DESC LIMIT ${limit}`;
+}
+
+export function walletDetail(db: Db, address: string) {
+  return db`
+    SELECT o.mint, COALESCE(o.symbol, k.symbol) AS symbol, o.kind, o.rank, o.buy_tier_usd, o.usd_value, o.amount_pct,
+           o.buy_volume_usd, o.sell_volume_usd, o.profit_usd, o.tags, o.maker_tags, o.ts,
+           p.max_ret, p.rugged
+    FROM wallet_observations o
+    LEFT JOIN tokens k ON k.mint = o.mint
+    LEFT JOIN LATERAL (SELECT max_ret, rugged FROM tracked_paths tp WHERE tp.mint = o.mint ORDER BY t0 LIMIT 1) p ON true
+    WHERE o.wallet = ${address} ORDER BY o.ts DESC LIMIT 200`;
+}

@@ -17,17 +17,19 @@ export class RateLimiter {
     this.last = now;
   }
 
-  tryTake(): boolean {
+  /** Ambil `weight` token kalau cukup (endpoint berbobot, mis. GMGN holders = 5). */
+  tryTake(weight = 1): boolean {
     this.refill();
-    if (this.tokens < 1) return false;
-    this.tokens -= 1;
+    if (this.tokens < weight) return false;
+    this.tokens -= weight;
     return true;
   }
 
-  /** Tunggu sampai ada token. */
-  async take(): Promise<void> {
-    while (!this.tryTake()) {
-      const waitMs = ((1 - this.tokens) / this.perMinute) * 60_000;
+  /** Tunggu sampai ada `weight` token. weight > burst dibatasi ke burst supaya tidak menunggu selamanya. */
+  async take(weight = 1): Promise<void> {
+    const w = Math.min(weight, this.burst);
+    while (!this.tryTake(w)) {
+      const waitMs = ((w - this.tokens) / this.perMinute) * 60_000;
       await Bun.sleep(Math.max(5, Math.ceil(waitMs)));
     }
   }

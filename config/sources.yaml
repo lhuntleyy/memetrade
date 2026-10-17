@@ -20,6 +20,18 @@ gmgn:
   poll_sec: 20
   feeds: [trending, trenches, hot]
 
+# Wallet tracker: tiap token yang dievaluasi pipeline → ambil top holder (GMGN) → catat
+#  - top_n holder terbesar (tanpa akun pool/exchange)
+#  - wallet dengan total beli ≥ $500 / ≥ $1000 (tier)
+wallet_tracker:
+  enabled: true
+  top_n: 10
+  big_buyer_usd: [500, 1000]
+  fetch_limit: 50
+  min_interval_sec: 6        # holders berbobot 5 = satu bucket penuh GMGN free
+  rescan_after_min: 360
+  delay_sec: 120
+
 meteora:
   enabled: false
   poll_sec: 30

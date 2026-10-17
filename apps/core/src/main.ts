@@ -21,6 +21,7 @@ import { MarketTracker } from "./market/tracker.ts";
 import { Pipeline } from "./strategy/pipeline.ts";
 import { PaperExecutor } from "./trading/paper-executor.ts";
 import { PositionManager } from "./trading/position-manager.ts";
+import { WalletTracker } from "./wallets/tracker.ts";
 
 const log = createLogger("core");
 const db = createDb(process.env.DATABASE_URL, { max: 8 });
@@ -62,6 +63,7 @@ const dex = new DexScreenerClient(src.dexscreener.base_url, src.dexscreener.rpm,
   mode: src.dexscreener.proxy_mode,
 });
 const tracker = new MarketTracker(src.tracker, dex, bus, db, log);
+log.info(await tracker.resume(), "tracked paths dipulihkan setelah restart");
 const pump = src.pumpportal.enabled ? startPumpPortal(src.pumpportal, bus, log) : null;
 const dexFeeds = src.dexscreener.enabled ? startDexScreenerFeeds(src.dexscreener, dex, bus, log) : null;
 // ---- Fase 2: enrichment + security + filter (decision log, tanpa entry) ----
@@ -110,6 +112,19 @@ const positions = new PositionManager({
   symbolOf: (mint) => symbols.get(mint) ?? null,
 });
 
+// ---- wallet tracker (top holder & pembeli besar, data GMGN) ----
+const wallets = gmgn
+  ? new WalletTracker(
+      () => configs.sources.data.wallet_tracker,
+      gmgn,
+      db,
+      log,
+      bus,
+      (m) => symbols.get(m) ?? null,
+    )
+  : null;
+if (!wallets) log.warn("wallet tracker nonaktif (GMGN_API_KEY tidak ada)");
+
 if (src.gmgn.enabled)
   log.warn(
     "collector trigger GMGN (trending/trenches) belum diimplementasi — enrichment GMGN tetap aktif kalau GMGN_API_KEY ada",
@@ -154,6 +169,7 @@ const control = startControlServer({
     rpc: rpc.hosts(),
     journal: recorder.stats(),
     trading: positions.summary(),
+    wallets: wallets ? wallets.stats : "off",
   }),
   onControl: async (action, actor) => {
     await db`INSERT INTO control_events (actor, action) VALUES (${actor}, ${action})`;
@@ -164,6 +180,12 @@ const control = startControlServer({
       await positions.panicAll();
     }
     bus.emit({ t: "Control", action, actor });
+  },
+  onWatchWallet: async (address, active, actor) => {
+    if (!wallets) return false;
+    await db`INSERT INTO control_events (actor, action, payload) VALUES (${actor}, 'watch_wallet', ${{ address, active }})`;
+    await wallets.setWatch(address, active);
+    return true;
   },
   onClosePosition: async (id, actor) => {
     await db`INSERT INTO control_events (actor, action, payload) VALUES (${actor}, 'close_position', ${{ id }})`;
@@ -238,6 +260,7 @@ async function shutdown(signal: string) {
   pump?.stop();
   dexFeeds?.stop();
   positions.stop();
+  wallets?.stop();
   await pipeline.stop();
   await tracker.stop();
   await recorder.stop();

@@ -1,5 +1,6 @@
 import { createDb } from "@memebot/db";
-import { createLogger } from "@memebot/shared";
+import { createLogger, loadConfig } from "@memebot/shared";
+import { loadReplayData, runReplay, sweepTpSl } from "../../core/src/research/replay.ts";
 import { createAuth, LOGIN_PAGE } from "./auth.ts";
 import {
   closedPositions,
@@ -15,6 +16,8 @@ import {
   rejectReasons,
   tokenDetail,
   tradingKpi,
+  walletDetail,
+  walletLeaderboard,
 } from "./queries.ts";
 import index from "./web/index.html";
 
@@ -148,6 +151,73 @@ const server = Bun.serve({
         closedPositions(db, limit),
       ]);
       return Response.json({ kpi, reasons, equity, trades });
+    }),
+    "/api/wallets": guard(async (req) => {
+      const u = new URL(req.url);
+      const hours = clampInt(u.searchParams.get("hours"), 24, 1, 24 * 30);
+      const minTier = clampInt(u.searchParams.get("tier"), 0, 0, 1_000_000);
+      const kindParam = u.searchParams.get("kind") ?? "all";
+      const kind = ["all", "top_holder", "big_buyer"].includes(kindParam) ? kindParam : "all";
+      return Response.json(await walletLeaderboard(db, hours, minTier, kind, 200));
+    }),
+    "/api/wallets/:address": guard(async (req) => {
+      const a = (req as Request & { params: { address: string } }).params.address;
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a))
+        return Response.json({ error: "alamat tidak valid" }, { status: 400 });
+      return Response.json(await walletDetail(db, a));
+    }),
+    "/api/wallets/:address/:action": {
+      POST: guard(async (req) => {
+        const { address, action } = (req as Request & { params: { address: string; action: string } }).params;
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address) || !["watch", "unwatch"].includes(action))
+          return Response.json({ error: "permintaan tidak valid" }, { status: 400 });
+        const r = await coreCommand(`/wallets/${address}/${action}`, req);
+        return Response.json(await r.json().catch(() => ({})), { status: r.status });
+      }),
+    },
+    "/api/backtest": guard(async (req) => {
+      const u = new URL(req.url);
+      const strategy = (await loadConfig("strategy")).data;
+      const profile = u.searchParams.get("profile") ?? "all";
+      const prof = profile === "all" ? Object.values(strategy.profiles)[0] : strategy.profiles[profile];
+      if (!prof) return Response.json({ error: "profile tidak ada" }, { status: 400 });
+      const exit = strategy.exits[prof.exits.ref.replace(/^exits\./, "")];
+      if (!exit) return Response.json({ error: "exit config tidak ada" }, { status: 400 });
+      const list = (k: string, def: number[]) => {
+        const v = (u.searchParams.get(k) ?? "")
+          .split(",")
+          .map(Number)
+          .filter((n) => Number.isFinite(n) && n > 0 && n <= 1000)
+          .slice(0, 8);
+        return v.length ? v : def;
+      };
+      const tps = list("tps", [15, 20, 25, 30, 40, 50]);
+      const sls = list("sls", [10, 15, 20, 30]);
+      const opts = {
+        latencySec: clampInt(u.searchParams.get("latency"), 1, 0, 30),
+        entryCostPct: Math.min(20, Math.max(0, Number(u.searchParams.get("entry_cost") ?? 1.5) || 0)),
+        exitCostPct: Math.min(20, Math.max(0, Number(u.searchParams.get("exit_cost") ?? 1.5) || 0)),
+      };
+      const data = await loadReplayData(db, {
+        profile,
+        hours: clampInt(u.searchParams.get("hours"), 24, 1, 24 * 30),
+        universe: u.searchParams.get("universe") === "evaluated" ? "evaluated" : "passed",
+        horizonSec: exit.max_hold_sec + 60,
+        maxCandidates: 2000,
+      });
+      const current = runReplay(data, exit, opts);
+      const cells = sweepTpSl(data, exit, tps, sls, opts);
+      return Response.json({
+        profile,
+        exitRef: prof.exits.ref,
+        options: opts,
+        candidates: data.candidates.length,
+        current: current.metrics,
+        trades: current.trades.slice(0, 200),
+        tps,
+        sls,
+        cells: cells.map((c) => ({ tp: c.tp, sl: c.sl, ...c.m })),
+      });
     }),
     "/api/system/events": guard(async () =>
       Response.json(

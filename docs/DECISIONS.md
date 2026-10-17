@@ -72,9 +72,15 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 - Entry ditolak kalau impact > `entry.max_price_impact_pct` (quote token baru bisa liar).
 - Mode live sengaja ditolak sampai Fase 5.
 
-### ADR-016 · 2026-10-17 · proposed — Dashboard publik via sslip.io + Caddy (menggantikan ADR-012 kalau diterapkan)
+### ADR-016 · 2026-10-17 · accepted — Dashboard publik via sslip.io + Caddy (menggantikan ADR-012)
 - User tidak mau Tailscale. Opsi: domain `43-156-246-199.sslip.io` → Caddy (HTTPS Let's Encrypt otomatis, HSTS) → dashboard 127.0.0.1:3000; login Argon2 + cookie Secure + throttle per IP (IP dari X-Forwarded-For hanya kalau datang dari Caddy lokal).
 - Risiko: panel kontrol bot terekspos ke internet (dilindungi password 20 karakter acak + throttle). Diterapkan oleh user sendiri lewat `infra/scripts/enable-public-dashboard.sh`.
 
 ### ADR-017 · 2026-10-17 · accepted — Exit "quick flip" 20–30% jual semua (preferensi user)
 - TP tunggal +30% (100%) + trailing aktif +20% jarak 4 poin. Tidak ada partial/moonbag. Bisa diubah di `exits.quick_flip`.
+
+### ADR-018 · 2026-10-17 · accepted — Filter spike harga & hanya pair ber-quote SOL
+- Tick dengan harga 0, lonjakan tak terkonfirmasi (>8× / >50×), atau harga pump.fun di bawah curve awal dibuang di tracker dan replay. priceNative hanya dipakai kalau quote = SOL.
+
+### ADR-019 · 2026-10-17 · accepted — Fee & tip dikunci 0.0001 SOL
+- Preferensi user: priority fee 100.000 lamports dan tip 100.000 lamports untuk entry, exit, dan panic.

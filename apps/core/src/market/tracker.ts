@@ -3,7 +3,10 @@ import type { EventBus, EventOf, Logger, SourcesConfig } from "@memebot/shared";
 import { toNum } from "@memebot/shared";
 import { type DexPair, type DexScreenerClient, pickMainPair } from "../collectors/dexscreener.ts";
 import { BatchWriter } from "../journal/batch.ts";
+import { despike, plausiblePrice, SpikeFilter } from "./despike.ts";
 import { type PathRow, PathStats } from "./path-stats.ts";
+
+const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 interface TickRow {
   ts: Date;
@@ -23,6 +26,8 @@ interface TickRow {
 export class MarketTracker {
   /** key `${mint}|${sourceKey}` → path aktif */
   private paths = new Map<string, PathStats>();
+  /** filter spike per mint (DexScreener kadang memberi harga 0 / lonjakan palsu) */
+  private spikes = new Map<string, SpikeFilter>();
   /** pair DexScreener terbaru per mint (dipakai enrichment, tanpa request tambahan) */
   private latest = new Map<string, { pair: DexPair; at: number }>();
   private byMint = new Map<string, Set<string>>();
@@ -31,13 +36,13 @@ export class MarketTracker {
   private loopTimer: Timer | undefined;
   private sweepTimer: Timer;
   private running = true;
-  stats = { started: 0, completed: 0, rejectedFull: 0, pollCycles: 0, lastCycleMs: 0 };
+  stats = { started: 0, completed: 0, rejectedFull: 0, pollCycles: 0, lastCycleMs: 0, droppedTicks: 0 };
 
   constructor(
     private readonly cfg: SourcesConfig["tracker"],
     private readonly dex: DexScreenerClient,
     private readonly bus: EventBus,
-    db: Db,
+    private readonly db: Db,
     private readonly log: Logger,
   ) {
     this.ticks = new BatchWriter<TickRow>(
@@ -88,6 +93,7 @@ export class MarketTracker {
     if (set && set.size === 0) {
       this.byMint.delete(mint);
       this.latest.delete(mint);
+      this.spikes.delete(mint);
     }
   }
 
@@ -142,6 +148,7 @@ export class MarketTracker {
         if (set && set.size === 0 && !this.pinned.has(p.mint)) {
           this.byMint.delete(p.mint);
           this.latest.delete(p.mint);
+          this.spikes.delete(p.mint);
         }
         this.stats.completed++;
       } else if (p.ticks > 0) {
@@ -164,29 +171,51 @@ export class MarketTracker {
             const pair = pickMainPair(pairs, mint);
             const priceSol = toNum(pair?.priceNative);
             if (!pair || priceSol === null) continue;
+            // priceNative hanya bermakna SOL kalau quote = SOL (pair pump.fun selalu SOL)
+            const solQuoted = pair.dexId === "pumpfun" || pair.quoteToken?.address === SOL_MINT;
+            if (!solQuoted) continue;
+            if (!plausiblePrice(mint, priceSol)) {
+              this.stats.droppedTicks++;
+              continue;
+            }
             this.latest.set(mint, { pair, at: now });
-            const tick = {
-              t: "PriceTick" as const,
-              mint,
-              ts: now,
-              priceSol,
-              priceUsd: toNum(pair.priceUsd) ?? undefined,
-              mcapUsd: toNum(pair.marketCap ?? pair.fdv) ?? undefined,
-              liquidityUsd: toNum(pair.liquidity?.usd) ?? undefined,
-              source: `dexscreener:${pair.dexId}`,
-            };
-            this.bus.emit(tick);
-            const priceUsd = tick.priceUsd ?? null;
-            this.ticks.push({
-              ts: new Date(now),
-              mint,
-              price_sol: priceSol,
-              price_usd: priceUsd,
-              mcap_usd: tick.mcapUsd ?? null,
-              // likuiditas DexScreener dalam USD → konversi ke SOL via rasio harga
-              liquidity_sol: tick.liquidityUsd && priceUsd ? (tick.liquidityUsd * priceSol) / priceUsd : null,
-              source: tick.source,
-            });
+            let f = this.spikes.get(mint);
+            if (!f) {
+              f = new SpikeFilter();
+              this.spikes.set(mint, f);
+            }
+            const accepted = f.push({ ts: now, price: priceSol });
+            if (accepted.length === 0) {
+              this.stats.droppedTicks++;
+              continue;
+            }
+            const priceUsd = toNum(pair.priceUsd);
+            const mcapUsd = toNum(pair.marketCap ?? pair.fdv);
+            const liquidityUsd = toNum(pair.liquidity?.usd);
+            for (const a of accepted) {
+              const tick = {
+                t: "PriceTick" as const,
+                mint,
+                ts: a.ts,
+                priceSol: a.price,
+                priceUsd: a.ts === now ? (priceUsd ?? undefined) : undefined,
+                mcapUsd: a.ts === now ? (mcapUsd ?? undefined) : undefined,
+                liquidityUsd: a.ts === now ? (liquidityUsd ?? undefined) : undefined,
+                source: `dexscreener:${pair.dexId}`,
+              };
+              this.bus.emit(tick);
+              this.ticks.push({
+                ts: new Date(a.ts),
+                mint,
+                price_sol: a.price,
+                price_usd: tick.priceUsd ?? null,
+                mcap_usd: tick.mcapUsd ?? null,
+                // likuiditas DexScreener dalam USD → konversi ke SOL via rasio harga
+                liquidity_sol:
+                  tick.liquidityUsd && tick.priceUsd ? (tick.liquidityUsd * a.price) / tick.priceUsd : null,
+                source: tick.source,
+              });
+            }
           }
         } catch (err) {
           const msg = String(err);
@@ -203,6 +232,57 @@ export class MarketTracker {
         this.loopTimer = setTimeout(r, wait);
       });
     }
+  }
+
+  /**
+   * Setelah restart: path yang belum selesai dibangun ulang dari tick di DB.
+   *  - t0 masih dalam jendela tracking → dilanjutkan (tetap di-poll)
+   *  - t0 sudah lewat jendela → difinalisasi (completed_at = t0 + track_minutes)
+   */
+  async resume(): Promise<{ resumed: number; finalized: number }> {
+    const trackMs = this.cfg.track_minutes * 60_000;
+    const rows = (await this.db`
+      SELECT mint, source, t0, trigger_price_sol FROM tracked_paths WHERE completed_at IS NULL ORDER BY t0 DESC`) as {
+      mint: string;
+      source: string;
+      t0: Date;
+      trigger_price_sol: number | null;
+    }[];
+    let resumed = 0;
+    let finalized = 0;
+    const now = Date.now();
+    for (const r of rows) {
+      const t0 = new Date(r.t0).getTime();
+      const ticks = (await this.db`
+        SELECT ts, price_sol FROM ticks WHERE mint = ${r.mint} AND ts BETWEEN ${r.t0} AND ${new Date(t0 + trackMs)}
+        ORDER BY ts`) as { ts: Date; price_sol: number }[];
+      const p = new PathStats(r.mint, r.source, t0, r.trigger_price_sol);
+      for (const t of despike(
+        ticks.map((x) => ({ ts: new Date(x.ts).getTime(), price: Number(x.price_sol) })),
+        r.mint,
+      ))
+        p.update(t.ts, t.price);
+      if (p.isDue(now, this.cfg.track_minutes)) {
+        p.complete(t0 + trackMs);
+        this.pathUpserts.push(p.toRow());
+        finalized++;
+        continue;
+      }
+      const key = `${r.mint}|${r.source}`;
+      if (this.paths.has(key)) continue;
+      // hormati batas token aktif (polling DexScreener); sisanya difinalisasi saat jatuh tempo di restart berikutnya
+      if (!this.byMint.has(r.mint) && this.byMint.size >= this.cfg.max_concurrent_tokens) continue;
+      this.paths.set(key, p);
+      let set = this.byMint.get(r.mint);
+      if (!set) {
+        set = new Set();
+        this.byMint.set(r.mint, set);
+      }
+      set.add(key);
+      resumed++;
+    }
+    await this.pathUpserts.flush();
+    return { resumed, finalized };
   }
 
   async stop() {

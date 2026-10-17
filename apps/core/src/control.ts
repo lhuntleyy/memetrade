@@ -12,6 +12,8 @@ interface Options {
   onControl: (action: ControlAction, actor: string) => Promise<void>;
   /** jual manual satu posisi (100%) — false kalau posisi tidak ditemukan */
   onClosePosition?: (id: number, actor: string) => Promise<boolean>;
+  /** tambah/lepas wallet dari watchlist */
+  onWatchWallet?: (address: string, active: boolean, actor: string) => Promise<boolean>;
   /** daftar posisi terbuka live (untuk dashboard) */
   positions?: () => unknown[];
 }
@@ -43,6 +45,11 @@ export function startControlServer(o: Options) {
       if (url.pathname === "/status" && req.method === "GET") return Response.json(o.status());
 
       if (url.pathname === "/positions" && req.method === "GET") return Response.json(o.positions?.() ?? []);
+      const wm = url.pathname.match(/^\/wallets\/([1-9A-HJ-NP-Za-km-z]{32,44})\/(watch|unwatch)$/);
+      if (wm && req.method === "POST" && o.onWatchWallet) {
+        const ok = await o.onWatchWallet(wm[1]!, wm[2] === "watch", req.headers.get("x-actor") ?? "unknown");
+        return Response.json({ ok }, { status: ok ? 200 : 503 });
+      }
       const pm = url.pathname.match(/^\/positions\/(\d+)\/close$/);
       if (pm && req.method === "POST" && o.onClosePosition) {
         const actor = req.headers.get("x-actor") ?? "unknown";

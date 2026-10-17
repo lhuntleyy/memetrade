@@ -301,6 +301,33 @@ export const SourcesConfig = z
       })
       .strict(),
     meteora: z.object({ enabled: z.boolean(), poll_sec: num.positive() }).strict(),
+    /** wallet tracker: scan top holder & pembeli besar token yang dievaluasi pipeline (data GMGN) */
+    wallet_tracker: z
+      .object({
+        enabled: z.boolean(),
+        /** jumlah top holder (urut % supply, tanpa akun pool/exchange) yang dicatat */
+        top_n: num.int().positive().max(100),
+        /** ambang pembeli besar (USD total beli) — tiap wallet diberi tier tertinggi yang terlewati */
+        big_buyer_usd: z.array(num.positive()).min(1),
+        /** jumlah holder yang diminta per token (maks 100) */
+        fetch_limit: num.int().positive().max(100),
+        /** jeda minimal antar scan token (dtk) — endpoint holders berbobot 5 di GMGN */
+        min_interval_sec: num.positive(),
+        /** token yang sama tidak di-scan ulang dalam jendela ini (menit) */
+        rescan_after_min: num.positive(),
+        /** tunggu setelah token dievaluasi sebelum scan (dtk) — biar holder terbentuk */
+        delay_sec: num.min(0),
+      })
+      .strict()
+      .default({
+        enabled: false,
+        top_n: 10,
+        big_buyer_usd: [500, 1000],
+        fetch_limit: 50,
+        min_interval_sec: 6,
+        rescan_after_min: 360,
+        delay_sec: 120,
+      }),
     tracker: z
       .object({
         track_minutes: num.positive(),

@@ -65,7 +65,8 @@ export interface GmgnData {
 }
 
 export class GmgnClient {
-  private limiter = new RateLimiter(30, 2);
+  // free tier: leaky bucket 5/5 (≈5 bobot/dtk). Kita pakai ±2 bobot/dtk, burst 5 (cukup untuk 1 panggilan holders).
+  private limiter = new RateLimiter(120, 5);
   private pausedUntil = 0;
   stats = { ok: 0, rateLimited: 0, skippedPaused: 0 };
 
@@ -78,12 +79,12 @@ export class GmgnClient {
     private readonly onUsage: ApiUsageFn = () => {},
   ) {}
 
-  private async get<T>(path: string, query: Record<string, string>): Promise<T | null> {
+  private async get<T>(path: string, query: Record<string, string>, weight = 1): Promise<T | null> {
     if (Date.now() < this.pausedUntil) {
       this.stats.skippedPaused++;
       throw new Error(`gmgn dijeda ${this.pausedForSec} dtk (rate limit)`);
     }
-    await this.limiter.take();
+    await this.limiter.take(weight);
     const qs = new URLSearchParams({
       ...query,
       timestamp: String(Math.floor(Date.now() / 1000)),
@@ -121,6 +122,16 @@ export class GmgnClient {
     }
   }
 
+  /** Top holder (bobot 5 = satu bucket penuh free tier). Urut berdasarkan % supply. */
+  async topHolders(mint: string, limit = 50): Promise<GmgnHolder[] | null> {
+    const data = await this.get<{ list?: GmgnHolder[] }>(
+      "/v1/market/token_top_holders",
+      { chain: "sol", address: mint, limit: String(limit), order_by: "amount_percentage", direction: "desc" },
+      5,
+    );
+    return data?.list ?? null;
+  }
+
   async token(mint: string): Promise<GmgnData> {
     const q = { chain: "sol", address: mint };
     // berurutan (bukan paralel) supaya tidak meledakkan bucket 5/5
@@ -128,6 +139,28 @@ export class GmgnClient {
     const security = await this.get<GmgnSecurity>("/v1/token/security", q).catch(() => null);
     return { info, security };
   }
+}
+
+export interface GmgnHolder {
+  address: string;
+  addr_type?: number;
+  exchange?: string;
+  usd_value?: number;
+  amount_percentage?: number;
+  buy_volume_cur?: number;
+  sell_volume_cur?: number;
+  profit?: number;
+  realized_profit?: number;
+  unrealized_profit?: number;
+  is_on_curve?: boolean;
+  is_suspicious?: boolean;
+  tags?: string[];
+  maker_token_tags?: string[];
+  wallet_tag_v2?: string;
+  start_holding_at?: number;
+  last_active_timestamp?: number;
+  twitter_username?: string | null;
+  name?: string | null;
 }
 
 const pct = (v: unknown) => {

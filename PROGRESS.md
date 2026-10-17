@@ -11,7 +11,7 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 | 1 — Observasi data | 🟡 jalan | Collector + tracker + dashboard live 24/7; sisa: GMGN, harga on-chain, Telegram |
 | 2 — Enrichment/security/filter | 🟡 jalan | Security on-chain + Jupiter + rule engine + shadow live; sisa: GMGN, simulasi jual, MTF |
 | 3 — Paper trading | 🟡 jalan | Engine paper live; sinyal masih jarang karena filter ketat & baru 2 profile |
-| 4 — Research loop & LLM | ⚪ belum | |
+| 4 — Research loop & LLM | 🟡 jalan | Replay + sweep + Backtest UI live; LLM menunggu API key |
 | 5 — Micro live | ⚪ belum | Wajib approval user |
 | 6 — Scale | ⚪ belum | |
 
@@ -84,10 +84,10 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [~] P3-09 Paper trading jalan sejak 2026-10-17 07:3x UTC — kumpulkan ≥ 300 trade/profile
 
 ## Fase 4 — Research loop & LLM
-- [ ] P4-01 CLI replay event-driven
-- [ ] P4-02 Parameter sweep + walk-forward
-- [ ] P4-03 Dashboard: Backtest/Replay + Config editor/versi/rollback
-- [!] P4-04 LLM worker + narrative tagger (pilih model) + budget harian
+- [x] P4-01 Replay: `research/replay.ts` (exit engine yang sama, entry tick +latency, biaya tetap) + CLI `replay` + tab Backtest
+- [~] P4-02 Sweep TP × SL ✅ (CLI & dashboard); walk-forward belum
+- [~] P4-03 Dashboard Backtest ✅; config editor/rollback belum
+- [!] P4-04 LLM worker + narrative tagger — butuh ANTHROPIC_API_KEY
 - [ ] P4-05 Daily review + proposal config → replay → approve
 - [ ] P4-06 Dashboard: AI Insights
 
@@ -101,7 +101,7 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [ ] P5-07 ≥ 100 trade live → evaluasi
 
 ## Fase 6 — Scale
-- [ ] P6-01 Profile `smart_money` + wallet scoring
+- [~] P6-01 Wallet tracker (top holder & pembeli besar ≥$500/≥$1000 via GMGN, tab Wallet, watchlist) ✅; profile `smart_money` & scoring belum
 - [ ] P6-02 Profile `swing_dip` (+ backfill GeckoTerminal)
 - [ ] P6-03 Profile `near_graduation`
 - [ ] P6-04 Profile `kol_call` (mtcute userbot + caller scoring)
@@ -179,3 +179,14 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - Dashboard publik via `https://43-156-246-199.sslip.io` (Caddy + Let's Encrypt): Caddy sudah terpasang, Caddyfile & skrip `infra/scripts/enable-public-dashboard.sh` siap. **Penerapan (buka port 80/443 + ekspos publik) diblok sistem keamanan auto-mode → user perlu menjalankan skrip sendiri** dan membuka port 80/443 di Security Group Tencent. Dashboard tetap jalan di IP Tailscale sampai itu dilakukan. Header X-Forwarded-For sekarang hanya dipercaya dari reverse proxy lokal (`DASHBOARD_TRUST_PROXY=1`).
 - Temuan GMGN free tier: leaky bucket **5/5**; request saat kena limit memperpanjang ban s/d 5 menit (`RATE_LIMIT_BANNED`). Bot sempat terban karena terus memanggil saat 429 → sekarang: info & security dipanggil berurutan, 30 req/menit, dan saat 429 SEMUA panggilan GMGN berhenti sampai `reset_at`. Profile eksplorasi mengabaikan field GMGN yang null; profile utama tetap reject. Upgrade plan GMGN (Plus 20/20) akan membuat data holder jauh lebih lengkap.
 - Hasil awal produksi: 2 sinyal `migration_momentum` lolos filter tapi entry ditolak guard price impact (16–18% > batas 2%); 1 entry eksplorasi gagal karena simulasi tx gagal (p 8%). Mayoritas token baru gagal di `mcap_usd:between` / `holders:gte` saat dievaluasi 60 dtk setelah create.
+
+### 2026-10-17 (lanjutan) — fee lock, wallet tracker, Fase 4, kualitas data
+- Fee & tip dikunci 0.0001 SOL (priority 100k lamports entry/exit/panic, tip 100k).
+- GMGN: setelah fix pause-on-429, 180 OK vs 2 rate-limited → laju dinaikkan ke ±2 bobot/dtk (burst 5), limiter berbobot (holders = 5).
+- Wallet tracker (`wallets/tracker.ts`, migrasi 0006): tiap token yang selesai dievaluasi filter → 2 menit kemudian ambil top holder GMGN (50) → catat top 10 holder (tanpa pool/exchange) + pembeli besar tier $500/$1000, tag GMGN (smart_degen, sniper, bundler, fresh_wallet) & maker tag (creator/dev_team). Tab **Wallet** (papan wallet, filter jenis/tier, detail token per wallet, tombol pantau → `watch_wallets`). Sudah 36 wallet tercatat di jam pertama.
+- Fase 4: replay/backtest + sweep TP×SL (CLI `replay [profile] [jam] [passed|evaluated]`, tab **Backtest** dengan heatmap).
+- **Temuan kualitas data DexScreener:** 17% tick pair pump.fun berharga 0; pair PumpSwap baru kadang melaporkan harga ribuan kali lipat (mcap $4,1 jt untuk token $70) selama beberapa tick. Ditambah `market/despike.ts` (tick 0 dibuang, lonjakan >8× butuh 1 konfirmasi, >50× butuh 5 konfirmasi, harga pump.fun < mcap 20 SOL ditolak) dipakai di tracker & replay; hanya pair ber-quote SOL dipakai.
+- **Bug tracked_paths:** setiap restart path yang sedang di-track hilang → belum pernah ada yang selesai. Sekarang `tracker.resume()` saat startup: lanjutkan path aktif (dibangun ulang dari tick, maks 300 token) & finalisasi yang lewat 90 menit (679 difinalisasi, 308 dilanjutkan). CLI `paths:recompute` untuk hitung ulang dari tick bersih.
+- **Hasil backtest awal (24 jam, semua token yang dievaluasi, biaya 1,5%+1,5%):** expectancy quick_flip ≈ −0,2…−0,8%/trade, median −3%, win rate 15–17% → baseline tanpa filter ≈ impas/negatif. Filter harus menaikkan ini di atas 0 sebelum live.
+- **Hasil paper trading awal (eksplorasi token baru):** 5 trade tutup, semua rugi (−0,053 SOL). Trade "take_profit" terealisasi −12% dan SL −15% terealisasi −25…−34% → harga DexScreener ≠ harga eksekusi untuk token baru; slippage exit besar. Rencana: monitoring PnL posisi pakai quote Jupiter (executable) bukan harga DexScreener, dan pertimbangkan menaikkan `wait_after_trigger_sec` / likuiditas minimum profile token baru.
+- Dashboard publik `https://43-156-246-199.sslip.io` **aktif** (user menjalankan `enable-public-dashboard.sh`); sertifikat Let's Encrypt OK, akses dari luar terverifikasi, API tanpa login → 401.

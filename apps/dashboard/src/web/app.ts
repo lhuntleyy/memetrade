@@ -451,6 +451,136 @@ async function loadTrades() {
     : `<tr><td colspan="11" class="muted">Belum ada trade.</td></tr>`;
 }
 
+// ---------- wallet tracker ----------
+const usd = (v: unknown) =>
+  v === null || v === undefined ? "–" : `$${Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+
+async function loadWallets() {
+  const q = `hours=${$<HTMLSelectElement>("#w-hours").value}&kind=${$<HTMLSelectElement>("#w-kind").value}&tier=${$<HTMLSelectElement>("#w-tier").value}`;
+  const rows = await getJson(`/api/wallets?${q}`);
+  $("#wallets tbody").innerHTML = rows.length
+    ? rows
+        .map((w) => {
+          const a = String(w.wallet);
+          const tags = [...((w.tags as string[] | null) ?? []), ...(w.is_dev ? ["dev"] : [])];
+          return `<tr><td><a href="#" data-wallet="${esc(a)}"><code>${esc(short(a))}</code></a></td>
+          <td>${num(w.tokens)}</td><td>${num(w.as_top_holder)}</td><td>${num(w.as_big_buyer)}</td>
+          <td>${usd(w.buy_usd)}</td><td>${usd(w.profit_usd)}</td>
+          <td>${tags.map((t) => `<span class="tag${t === "smart_degen" ? " ok" : t === "dev" || t === "bundler" ? " bad" : ""}">${esc(t)}</span>`).join(" ")}</td>
+          <td>${wib.format(new Date(String(w.last_seen)))}</td>
+          <td><button type="button" class="btn small" data-watch="${esc(a)}" data-on="${w.watched ? "0" : "1"}">${w.watched ? "★ dipantau" : "☆ pantau"}</button></td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="9" class="muted">Belum ada data — scan holder jalan ±2 menit setelah token dievaluasi.</td></tr>`;
+}
+
+async function loadWalletDetail(address: string) {
+  const rows = await getJson(`/api/wallets/${encodeURIComponent(address)}`);
+  $("#wallet-detail").innerHTML = `<h2>Wallet <code>${esc(address)}</code></h2>
+    <p><a href="https://gmgn.ai/sol/address/${encodeURIComponent(address)}" target="_blank" rel="noopener noreferrer">GMGN</a> ·
+       <a href="https://solscan.io/account/${encodeURIComponent(address)}" target="_blank" rel="noopener noreferrer">Solscan</a></p>
+    <div class="scroll"><table><thead><tr><th>Waktu</th><th>Token</th><th>Jenis</th><th>% supply</th><th>Beli</th><th>Jual</th><th>Profit</th><th>Max token</th><th>Tag</th></tr></thead><tbody>
+    ${rows
+      .map(
+        (r) => `<tr><td>${wib.format(new Date(String(r.ts)))}</td>
+      <td>${r.symbol ? `<b>${esc(r.symbol)}</b> ` : ""}<a href="#" data-mint="${esc(r.mint)}"><code>${esc(short(String(r.mint)))}</code></a></td>
+      <td>${r.kind === "top_holder" ? `top #${esc(r.rank)}` : `beli ≥ ${usd(r.buy_tier_usd)}`}</td>
+      <td>${num(r.amount_pct !== null ? `${Number(r.amount_pct).toFixed(2)}%` : null)}</td><td>${usd(r.buy_volume_usd)}</td><td>${usd(r.sell_volume_usd)}</td>
+      <td>${usd(r.profit_usd)}</td><td>${pct(r.max_ret)}</td>
+      <td>${[...((r.tags as string[]) ?? []), ...((r.maker_tags as string[]) ?? [])].map((t) => `<span class="tag">${esc(t)}</span>`).join(" ")}</td></tr>`,
+      )
+      .join("")}</tbody></table></div>`;
+}
+
+for (const id of ["#w-hours", "#w-kind", "#w-tier"])
+  $<HTMLSelectElement>(id).onchange = () => void loadWallets();
+document.addEventListener("click", async (ev) => {
+  const el = ev.target as HTMLElement;
+  const w = el.closest<HTMLElement>("a[data-wallet]");
+  if (w) {
+    ev.preventDefault();
+    void loadWalletDetail(w.dataset.wallet!);
+    return;
+  }
+  const watch = el.closest<HTMLElement>("[data-watch]");
+  if (watch) {
+    const r = await postJson(
+      `/api/wallets/${watch.dataset.watch}/${watch.dataset.on === "1" ? "watch" : "unwatch"}`,
+    );
+    toast(r.ok ? "Watchlist diperbarui" : "Gagal memperbarui watchlist");
+    void loadWallets();
+  }
+});
+
+// ---------- backtest ----------
+let btProfilesLoaded = false;
+async function initBacktest() {
+  if (btProfilesLoaded) return;
+  const f = await getJson<{ funnel: Row[] }>("/api/pipeline?hours=168");
+  const sel = $<HTMLSelectElement>("#bt-profile");
+  for (const r of f.funnel)
+    sel.insertAdjacentHTML("beforeend", `<option value="${esc(r.profile)}">${esc(r.profile)}</option>`);
+  btProfilesLoaded = true;
+}
+
+$("#bt-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const cost = $<HTMLInputElement>("#bt-cost").value;
+  const q = new URLSearchParams({
+    profile: $<HTMLSelectElement>("#bt-profile").value,
+    universe: $<HTMLSelectElement>("#bt-universe").value,
+    hours: $<HTMLSelectElement>("#bt-hours").value,
+    tps: $<HTMLInputElement>("#bt-tps").value,
+    sls: $<HTMLInputElement>("#bt-sls").value,
+    entry_cost: cost,
+    exit_cost: cost,
+  });
+  $("#bt-result").innerHTML = `<p class="muted">Menghitung…</p>`;
+  const r = await getJson<{
+    candidates: number;
+    exitRef: string;
+    current: Row;
+    tps: number[];
+    sls: number[];
+    cells: Row[];
+  }>(`/api/backtest?${q}`);
+  if ((r as unknown as Row).error) {
+    $("#bt-result").innerHTML = `<p class="bad">${esc((r as unknown as Row).error)}</p>`;
+    return;
+  }
+  const m = r.current;
+  const reasons = Object.entries((m.reasons ?? {}) as Record<string, number>)
+    .map(([k, v]) => `${esc(k)}: ${v}`)
+    .join(", ");
+  const best = Math.max(...r.cells.map((c) => Number(c.expectancyPct ?? -1e9)));
+  const cell = (tp: number, sl: number) => {
+    const c = r.cells.find((x) => x.tp === tp && x.sl === sl);
+    if (!c || c.expectancyPct === null) return `<td class="muted">–</td>`;
+    const e = Number(c.expectancyPct);
+    const a = Math.min(1, Math.abs(e) / 5).toFixed(2);
+    const bg = e >= 0 ? `rgb(60 207 145 / ${a})` : `rgb(239 90 111 / ${a})`;
+    return `<td style="background:${bg}${e === best ? ";outline:2px solid var(--accent)" : ""}" title="PF ${c.profitFactor ?? "–"}, median ${c.medianPct}%, n ${c.trades}">${e > 0 ? "+" : ""}${e.toFixed(2)}% <span class="muted">(${c.winRate}%)</span></td>`;
+  };
+  $("#bt-result").innerHTML = `
+    <div class="grid">${card(
+      `Exit sekarang (${esc(r.exitRef)})`,
+      m.expectancyPct === null ? null : Number(m.expectancyPct) > 0,
+      [
+        ["kandidat / trade", `${r.candidates} / ${m.trades}`],
+        ["win rate", m.winRate !== null ? `${m.winRate}%` : "–"],
+        ["expectancy / trade", m.expectancyPct !== null ? `${m.expectancyPct}%` : "–"],
+        ["median / trade", m.medianPct !== null ? `${m.medianPct}%` : "–"],
+        ["profit factor", m.profitFactor ?? "–"],
+        ["rata-rata win / loss", `${m.avgWinPct ?? "–"}% / ${m.avgLossPct ?? "–"}%`],
+      ],
+    )}${card("Alasan exit", null, [["", reasons || "–"]])}</div>
+    <h2>Sweep TP (jual 100%) × SL</h2>
+    <div class="scroll"><table class="heat"><thead><tr><th>TP \\ SL</th>${r.sls.map((sl) => `<th>-${sl}%</th>`).join("")}</tr></thead><tbody>
+    ${r.tps.map((tp) => `<tr><th>+${tp}%</th>${r.sls.map((sl) => cell(tp, sl)).join("")}</tr>`).join("")}
+    </tbody></table></div>
+    <p class="muted">Kotak bergaris = expectancy terbaik. Hati-hati overfitting: pilih area yang konsisten hijau, bukan satu sel terbaik — dan butuh ratusan trade.</p>`;
+});
+
 // ---------- toast ----------
 function toast(msg: string) {
   const el = document.createElement("div");
@@ -508,6 +638,8 @@ async function refresh() {
     else if (current === "pipeline") await loadPipeline();
     else if (current === "positions") await loadPositions();
     else if (current === "trades") await loadTrades();
+    else if (current === "wallets") await loadWallets();
+    else if (current === "backtest") await initBacktest(); // hasil tidak auto-refresh
     // tab token tidak auto-refresh (hindari menimpa saat dibaca)
   } catch (err) {
     console.error(err);
