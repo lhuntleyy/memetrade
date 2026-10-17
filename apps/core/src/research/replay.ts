@@ -1,6 +1,7 @@
 import type { Db } from "@memebot/db";
-import { ExitConfig } from "@memebot/shared";
+import { ExitConfig, type FilterRule, type StrategyConfig } from "@memebot/shared";
 import { despike } from "../market/despike.ts";
+import { evaluateFilters } from "../strategy/rules.ts";
 import { applySell, evaluateExit, newExitState } from "../trading/exit-engine.ts";
 
 /**
@@ -228,4 +229,60 @@ export function sweepTpSl(
     }
   }
   return cells;
+}
+
+/**
+ * "What-if filter": ambil token yang pernah dievaluasi (beserta fitur yang tersimpan di decisions), saring ulang
+ * dengan rule baru, lalu replay. Dipakai untuk menguji perubahan filter memakai data lampau.
+ */
+export async function loadRefilteredData(
+  db: Db,
+  req: {
+    triggerSources: string[];
+    hours: number;
+    horizonSec: number;
+    filters: FilterRule[];
+    defaults: StrategyConfig["defaults"];
+  },
+) {
+  const rows = (await db`
+    SELECT DISTINCT ON (d.mint, d.trigger_ts) d.mint, d.ts, d.features,
+           (SELECT bool_and(s.passed) FROM decisions s WHERE s.mint = d.mint AND s.trigger_ts = d.trigger_ts AND s.stage = 'security') AS sec_ok
+    FROM decisions d
+    WHERE d.stage = 'filter' AND d.ts > now() - make_interval(hours => ${req.hours})
+      AND d.trigger_source IN ${db(req.triggerSources)}
+    ORDER BY d.mint, d.trigger_ts, d.ts`) as {
+    mint: string;
+    ts: Date;
+    features: Record<string, number | string | boolean | null>;
+    sec_ok: boolean | null;
+  }[];
+  const candidates: ReplayCandidate[] = [];
+  const rejected: Record<string, number> = {};
+  for (const r of rows) {
+    if (r.sec_ok === false) continue;
+    const f = evaluateFilters(req.filters, r.features ?? {}, req.defaults);
+    if (f.passed) candidates.push({ mint: r.mint, profile: "refilter", ts: new Date(r.ts).getTime() });
+    else for (const x of f.failed) rejected[x] = (rejected[x] ?? 0) + 1;
+  }
+  const ticks = new Map<string, Tick[]>();
+  if (candidates.length) {
+    const mints = [...new Set(candidates.map((c) => c.mint))];
+    const from = new Date(Math.min(...candidates.map((c) => c.ts)));
+    const to = new Date(Math.max(...candidates.map((c) => c.ts)) + req.horizonSec * 1000);
+    const tr = (await db`
+      SELECT mint, ts, price_sol FROM ticks
+      WHERE mint IN ${db(mints)} AND ts BETWEEN ${from} AND ${to} AND price_sol > 0 ORDER BY mint, ts`) as {
+      mint: string;
+      ts: Date;
+      price_sol: number;
+    }[];
+    for (const t of tr) {
+      const list = ticks.get(t.mint) ?? [];
+      list.push({ ts: new Date(t.ts).getTime(), price: Number(t.price_sol) });
+      ticks.set(t.mint, list);
+    }
+    for (const [m, list] of ticks) ticks.set(m, despike(list, m));
+  }
+  return { evaluated: rows.length, candidates, ticks, rejected };
 }

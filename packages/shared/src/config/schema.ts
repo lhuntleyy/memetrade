@@ -124,6 +124,8 @@ export const Profile = z
     triggers: z.array(z.string().regex(/^[a-z0-9_]+\.[a-z0-9_]+$/, "format trigger: sumber.jenis")).min(1),
     wait_after_trigger_sec: num.min(0).default(0),
     eval_window_sec: num.positive().default(900),
+    /** >0: token yang gagal filter dievaluasi ulang tiap N dtk selama eval_window_sec (pre-check DexScreener dulu) */
+    reeval_interval_sec: num.min(0).default(0),
     filters: z.array(FilterRule).default([]),
     mtf: z
       .object({ trend: MtfLayer.optional(), setup: MtfLayer.optional(), trigger: MtfLayer })
@@ -237,6 +239,19 @@ export const TradeConfig = z
           })
           .strict(),
         close_ata_after_exit: z.boolean(),
+        /** monitoring PnL posisi pakai quote Jupiter (nilai jual executable), bukan harga DexScreener */
+        quote_monitor: z
+          .object({
+            enabled: z.boolean(),
+            /** jeda minimal antar quote per posisi */
+            interval_ms: num.int().positive(),
+            /** kalau tidak ada quote sukses selama ini, exit boleh memakai estimasi harga DexScreener */
+            max_staleness_ms: num.int().positive(),
+            /** anggaran quote Jupiter per menit (entry + monitoring + fill exit) */
+            budget_per_min: num.int().positive(),
+          })
+          .strict()
+          .default({ enabled: true, interval_ms: 4000, max_staleness_ms: 20000, budget_per_min: 35 }),
         confirm_timeout_ms: num.int().positive(),
       })
       .strict(),

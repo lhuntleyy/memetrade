@@ -169,6 +169,7 @@ const control = startControlServer({
     rpc: rpc.hosts(),
     journal: recorder.stats(),
     trading: positions.summary(),
+    quotes: executor.quoteStats,
     wallets: wallets ? wallets.stats : "off",
   }),
   onControl: async (action, actor) => {
@@ -210,13 +211,17 @@ const control = startControlServer({
       soldFrac: p.state.soldFrac,
       ladderDone: p.state.ladderDone,
       breakEvenArmed: p.state.breakEvenArmed,
+      // PnL dari quote Jupiter terakhir (executable); estimasi DexScreener hanya kalau belum ada quote
       pnlPct:
-        p.lastPrice !== null
+        p.lastQuotePnl ??
+        (p.lastPrice !== null
           ? ((p.lastPrice * (1 - executor.estimateExitCostPct(p.mint, p.tokensHeld) / 100)) /
               p.state.entryPrice -
               1) *
             100
-          : null,
+          : null),
+      pnlSource: p.lastQuotePnl !== null ? "quote" : "estimate",
+      quoteAgeSec: p.lastQuoteOkAt ? Math.round((Date.now() - p.lastQuoteOkAt) / 1000) : null,
     })),
 });
 await positions.restore();

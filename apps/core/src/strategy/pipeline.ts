@@ -29,6 +29,8 @@ interface Job {
   triggerSource: string;
   triggerTs: number;
   attempts: number;
+  /** jumlah evaluasi ulang yang sudah dilakukan (profile dengan reeval_interval_sec) */
+  evals: number;
 }
 
 export interface PipelineDeps {
@@ -73,6 +75,8 @@ export class Pipeline {
     errors: 0,
     noPair: 0,
     queue: 0,
+    preRetries: 0,
+    reevals: 0,
   };
 
   constructor(private readonly d: PipelineDeps) {
@@ -93,7 +97,14 @@ export class Pipeline {
     for (const [name, p] of Object.entries(this.d.strategy().profiles)) {
       if (p.mode === "off" || !p.triggers.includes(key)) continue;
       this.stats.scheduled++;
-      const job: Job = { mint: e.mint, profile: name, triggerSource: key, triggerTs: e.ts, attempts: 0 };
+      const job: Job = {
+        mint: e.mint,
+        profile: name,
+        triggerSource: key,
+        triggerTs: e.ts,
+        attempts: 0,
+        evals: 0,
+      };
       this.later(() => this.enqueue(job), p.wait_after_trigger_sec * 1000);
     }
   }
@@ -144,6 +155,25 @@ export class Pipeline {
     if (!pair) this.stats.noPair++;
 
     const now = Date.now();
+    const defaults = this.d.strategy().defaults;
+    // evaluasi ulang: token yang belum memenuhi filter dicek lagi tiap reeval_interval_sec selama eval_window_sec
+    const interval = profile.reeval_interval_sec * 1000;
+    const canRetry = interval > 0 && now + interval <= job.triggerTs + profile.eval_window_sec * 1000;
+    const retry = () => {
+      job.evals++;
+      this.later(() => this.enqueue(job), interval);
+    };
+    if (canRetry) {
+      // pre-check GRATIS dari data DexScreener (cache tracker) sebelum memanggil Jupiter/GMGN/RPC
+      const dex = dexFeatures(pair, now);
+      const dexRules = profile.filters.filter((r) => dex[r.field] !== undefined && dex[r.field] !== null);
+      if (!evaluateFilters(dexRules, dex, defaults).passed) {
+        this.stats.preRetries++;
+        retry();
+        return;
+      }
+    }
+
     const [jup, secOnchain, gm] = await Promise.all([
       this.jupiterCached(job.mint),
       this.securityCached(job.mint),
@@ -170,6 +200,14 @@ export class Pipeline {
       trigger_ts: new Date(job.triggerTs),
     };
 
+    const f = evaluateFilters(profile.filters, features, defaults);
+    if (sec.verdict === "pass" && !f.passed && canRetry) {
+      // belum memenuhi syarat tapi masih dalam window → coba lagi nanti (tidak dicatat sebagai keputusan final)
+      this.stats.reevals++;
+      retry();
+      return;
+    }
+
     // 1) security
     const secRow: DecisionRow = {
       ...base,
@@ -192,14 +230,19 @@ export class Pipeline {
       // tetap evaluasi filter (dicatat) supaya shadow analysis lengkap, tapi hasil akhir = gagal
     }
 
-    // 2) filter
-    const f = evaluateFilters(profile.filters, features, this.d.strategy().defaults);
+    // 2) filter (hasil final: lolos, atau window evaluasi habis)
     this.decisions.push({
       ...base,
       stage: "filter",
       passed: f.passed,
       failed_rules: pgTextArray(f.failed),
-      features: { ...features, _ignored_null: f.ignoredNull, _pair_found: Boolean(pair) },
+      features: {
+        ...features,
+        _ignored_null: f.ignoredNull,
+        _pair_found: Boolean(pair),
+        _evals: job.evals + 1,
+        _sec_after_trigger: Math.round((now - job.triggerTs) / 1000),
+      },
     });
     this.d.bus.emit({
       t: "Decision",
@@ -214,7 +257,7 @@ export class Pipeline {
     if (secRow.passed && f.passed) {
       this.stats.signals++;
       this.d.bus.emit({ t: "Signal", mint: job.mint, profile: job.profile, score: 0 });
-      this.d.log.info({ mint: job.mint, profile: job.profile }, "SIGNAL (Fase 2: belum ada entry)");
+      this.d.log.info({ mint: job.mint, profile: job.profile }, "SIGNAL");
     }
   }
 

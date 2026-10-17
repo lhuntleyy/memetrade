@@ -2,7 +2,7 @@ import { createDb, migrate } from "@memebot/db";
 import { ConfigError, configSchemas, loadConfig } from "@memebot/shared";
 import { despike } from "../../core/src/market/despike.ts";
 import { PathStats } from "../../core/src/market/path-stats.ts";
-import { loadReplayData, runReplay, sweepTpSl } from "../../core/src/research/replay.ts";
+import { loadRefilteredData, loadReplayData, runReplay, sweepTpSl } from "../../core/src/research/replay.ts";
 
 const commands: Record<string, { help: string; run: (args: string[]) => Promise<number> }> = {
   migrate: {
@@ -51,6 +51,42 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
           });
           console.log(`TP${String(tp).padEnd(4)}${row.join("")}`);
         }
+        return 0;
+      } finally {
+        await db.close();
+      }
+    },
+  },
+  refilter: {
+    help: "uji filter profile (config sekarang) pada token yang pernah dievaluasi: refilter <profile> [jam=24]",
+    async run(args) {
+      const [profile, hoursArg = "24"] = args;
+      const strategy = (await loadConfig("strategy")).data;
+      const p = profile ? strategy.profiles[profile] : undefined;
+      if (!p) {
+        console.error(`profile '${profile}' tidak ada`);
+        return 1;
+      }
+      const exit = strategy.exits[p.exits.ref.replace(/^exits\./, "")]!;
+      const db = createDb(process.env.DATABASE_URL_RO ?? process.env.DATABASE_URL, { max: 2 });
+      try {
+        const d = await loadRefilteredData(db, {
+          triggerSources: p.triggers,
+          hours: Number(hoursArg),
+          horizonSec: exit.max_hold_sec + 60,
+          filters: p.filters,
+          defaults: strategy.defaults,
+        });
+        const m = runReplay(d, exit, { latencySec: 1, entryCostPct: 2, exitCostPct: 2 }).metrics;
+        console.log(`dievaluasi ${d.evaluated}, lolos filter ${d.candidates.length}, trade ${m.trades}`);
+        console.log(m);
+        const top = Object.entries(d.rejected)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 8);
+        console.log("alasan tolak teratas:", top.map(([k, v]) => `${k}=${v}`).join(", "));
+        console.log(
+          "catatan: fitur diambil saat evaluasi lama (waktu tunggu lama), bukan waktu tunggu config sekarang.",
+        );
         return 0;
       } finally {
         await db.close();

@@ -84,3 +84,10 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 
 ### ADR-019 · 2026-10-17 · accepted — Fee & tip dikunci 0.0001 SOL
 - Preferensi user: priority fee 100.000 lamports dan tip 100.000 lamports untuk entry, exit, dan panic.
+
+### ADR-020 · 2026-10-17 · accepted — Keputusan exit dari quote Jupiter (executable)
+- Paper trading pertama menunjukkan harga DexScreener ≠ harga eksekusi untuk token baru ("take profit" terealisasi −12%, SL −15% terealisasi −25…−34%).
+- Exit engine sekarang diumpan nilai jual bersih dari quote Jupiter per posisi; DexScreener hanya alarm (quote segera) dan cadangan saat quote basi > `max_staleness_ms`.
+
+### ADR-021 · 2026-10-17 · accepted — Evaluasi ulang token dalam window
+- Token baru jarang memenuhi syarat di menit pertama. Profile bisa mengevaluasi ulang tiap `reeval_interval_sec` sampai `eval_window_sec`, dengan pre-check data gratis untuk menghemat kuota API berbayar/terbatas.

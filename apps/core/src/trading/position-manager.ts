@@ -40,7 +40,22 @@ interface OpenPosition {
   busy: boolean;
   /** jumlah percobaan jual gagal beruntun (untuk alert & panic) */
   sellFails: number;
+  /** monitoring quote Jupiter (nilai jual executable) */
+  lastQuoteAt: number;
+  lastQuoteOkAt: number | null;
+  lastQuotePnl: number | null;
+  quoteUrgent: boolean;
+  quoting: boolean;
 }
+
+/** Field monitoring quote untuk posisi baru / dipulihkan. */
+const QUOTE_INIT = {
+  lastQuoteAt: 0,
+  lastQuoteOkAt: null,
+  lastQuotePnl: null,
+  quoteUrgent: false,
+  quoting: false,
+};
 
 export interface PositionManagerDeps {
   bus: EventBus;
@@ -72,16 +87,83 @@ export class PositionManager {
   private lastCloseAt: number | null = null;
   private realizedTotalSol = 0;
   private timer: Timer;
-  stats = { signals: 0, riskRejected: 0, entries: 0, entryFailed: 0, exits: 0, sellFailed: 0 };
+  private quoteTimer: Timer;
+  private quotingNow = 0;
+  stats = {
+    signals: 0,
+    riskRejected: 0,
+    entries: 0,
+    entryFailed: 0,
+    exits: 0,
+    sellFailed: 0,
+    quoteChecks: 0,
+    quoteFailed: 0,
+    urgentQuotes: 0,
+    staleFallbacks: 0,
+  };
 
   constructor(private readonly d: PositionManagerDeps) {
     d.bus.on("Signal", (e) => void this.onSignal(e));
     d.bus.on("PriceTick", (e) => void this.onTick(e.mint, e.ts, e.priceSol));
     // cek berkala (max hold / stale tetap jalan walau tick berhenti)
+    // cek berkala (max hold / stale) memakai harga DexScreener — hanya kalau quote monitor mati atau basi
     this.timer = setInterval(() => {
       for (const p of this.open.values())
         if (p.lastPrice) void this.onTick(p.mint, Date.now(), p.lastPrice, true);
     }, 5000);
+    // loop quote Jupiter: posisi "urgent" (alarm dari DexScreener) dulu, lalu yang quote-nya paling lama
+    this.quoteTimer = setInterval(() => this.scheduleQuotes(), 500);
+  }
+
+  private get qm() {
+    return this.d.trade().execution.quote_monitor;
+  }
+
+  private quoteStale(p: OpenPosition, now: number) {
+    return now - (p.lastQuoteOkAt ?? p.openedAt) > this.qm.max_staleness_ms;
+  }
+
+  private scheduleQuotes() {
+    const qm = this.qm;
+    if (!qm.enabled || this.quotingNow >= 2) return;
+    const now = Date.now();
+    const due = this.openPositions
+      .filter((p) => !p.busy && !p.quoting && (p.quoteUrgent || now - p.lastQuoteAt >= qm.interval_ms))
+      .sort((a, b) => Number(b.quoteUrgent) - Number(a.quoteUrgent) || a.lastQuoteAt - b.lastQuoteAt);
+    for (const p of due.slice(0, 2 - this.quotingNow)) void this.quoteCheck(p);
+  }
+
+  /** Ambil quote jual untuk seluruh sisa posisi → evaluasi exit dengan nilai executable. */
+  private async quoteCheck(p: OpenPosition) {
+    p.quoting = true;
+    this.quotingNow++;
+    if (p.quoteUrgent) this.stats.urgentQuotes++;
+    p.quoteUrgent = false;
+    p.lastQuoteAt = Date.now();
+    try {
+      const cfg = this.d.strategy().exits[p.exitRef];
+      if (!cfg || p.tokensHeld <= 0) return;
+      const v = await this.d.executor.quoteSellValue(p.mint, p.tokensHeld, true);
+      this.stats.quoteChecks++;
+      if (!v || !(v.netSol > 0)) {
+        this.stats.quoteFailed++;
+        return;
+      }
+      const now = Date.now();
+      p.lastQuoteOkAt = now;
+      if (p.busy || !this.open.has(p.id)) return;
+      // harga per token sudah bersih (impact + fee pool/platform + fee jaringan + rent kembali) → exitCostPct 0
+      const action = evaluateExit(cfg, p.state, { ts: now, price: v.netSol / p.tokensHeld, exitCostPct: 0 });
+      p.lastQuotePnl = action.pnlPct;
+      if (now - p.lastMarkAt >= MARK_EVERY_MS) {
+        p.lastMarkAt = now;
+        void this.mark(p, now, v.grossSol / p.tokensHeld, action.pnlPct);
+      }
+      if (action.type === "sell") await this.sell(p, action);
+    } finally {
+      p.quoting = false;
+      this.quotingNow--;
+    }
   }
 
   /** Muat posisi terbuka & statistik hari ini dari DB (setelah restart). */
@@ -114,6 +196,7 @@ export class PositionManager {
         lastMarkAt: 0,
         busy: false,
         sellFails: 0,
+        ...QUOTE_INIT,
       };
       this.open.set(p.id, p);
       this.d.tracker.pin(p.mint);
@@ -277,6 +360,7 @@ export class PositionManager {
         lastMarkAt: 0,
         busy: false,
         sellFails: 0,
+        ...QUOTE_INIT,
       });
       this.stats.entries++;
       this.d.log.info(
@@ -304,6 +388,13 @@ export class PositionManager {
       const cfg = this.d.strategy().exits[p.exitRef];
       if (!cfg) continue;
       const exitCostPct = this.d.executor.estimateExitCostPct(p.mint, p.tokensHeld);
+      if (this.qm.enabled && !this.quoteStale(p, ts)) {
+        // harga DexScreener tidak boleh mengubah state (peak) atau memicu exit — cukup jadi alarm untuk quote segera
+        const est = evaluateExit(cfg, structuredClone(p.state), { ts, price, exitCostPct });
+        if (est.type === "sell") p.quoteUrgent = true;
+        continue;
+      }
+      if (this.qm.enabled) this.stats.staleFallbacks++;
       const action = evaluateExit(cfg, p.state, { ts, price, exitCostPct });
       if (ts - p.lastMarkAt >= MARK_EVERY_MS) {
         p.lastMarkAt = ts;
@@ -442,6 +533,7 @@ export class PositionManager {
 
   stop() {
     clearInterval(this.timer);
+    clearInterval(this.quoteTimer);
   }
 }
 

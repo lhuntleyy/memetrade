@@ -64,20 +64,27 @@ profiles:
   # Tujuan: kumpulkan banyak trade paper secepatnya supaya filter/exit bisa dituning dari data.
   # JANGAN dijadikan live tanpa evaluasi (Fase 4).
   explore_new_token:
+    # Diperketat 2026-10-17: evaluasi di detik ke-60 terbukti rugi (replay 24 jam: exp −12%/trade, SL slip ke −25…−34%).
+    # Sekarang: mulai menit ke-2, cek ulang tiap 60 dtk s/d menit ke-10, syarat likuiditas & partisipasi lebih tinggi.
     mode: paper
     bucket_pct: 15
     triggers: [pumpportal.new_token]
-    wait_after_trigger_sec: 60        # tunggu data pasar & holder terbentuk
+    wait_after_trigger_sec: 120
+    eval_window_sec: 600
+    reeval_interval_sec: 60
     filters:
-      - { field: mcap_usd,          op: between, value: [5000, 150000] }
-      - { field: holders,           op: gte,     value: 20 }
-      - { field: traders_5m,        op: gte,     value: 10 }
-      - { field: buy_sell_ratio_5m, op: gte,     value: 1.0 }
-      # field GMGN: eksplorasi tetap jalan kalau GMGN kena rate limit (free tier 5/5)
-      - { field: dev_hold_pct,      op: lte,     value: 15, on_null: ignore }
-      - { field: top10_pct,         op: lte,     value: 50, on_null: ignore }
-      - { field: bundler_pct,       op: lte,     value: 60, on_null: ignore }
-    entry: { size_sol: 0.05, max_price_impact_pct: 5.0 }
+      - { field: liquidity_usd,     op: gte,     value: 10000 }
+      - { field: mcap_usd,          op: between, value: [15000, 200000] }
+      - { field: holders,           op: gte,     value: 60 }
+      - { field: traders_5m,        op: gte,     value: 25 }
+      - { field: buy_sell_ratio_5m, op: gte,     value: 1.1 }
+      - { field: price_change_5m,   op: between, value: [-25, 150] }
+      # field GMGN: diabaikan kalau GMGN kena rate limit
+      - { field: dev_hold_pct,      op: lte,     value: 10, on_null: ignore }
+      - { field: top10_pct,         op: lte,     value: 40, on_null: ignore }
+      - { field: bundler_pct,       op: lte,     value: 50, on_null: ignore }
+      - { field: sniper_pct,        op: lte,     value: 20, on_null: ignore }
+    entry: { size_sol: 0.05, max_price_impact_pct: 3.0 }
     exits: { ref: exits.quick_flip }
 
   explore_migration:

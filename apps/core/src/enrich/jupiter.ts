@@ -52,8 +52,8 @@ export class JupiterTokens {
     const key = process.env.JUPITER_API_KEY;
     this.base = key ? "https://api.jup.ag" : "https://lite-api.jup.ag";
     this.headers = key ? { "x-api-key": key } : {};
-    // keyless 0.5 RPS = 30/menit; pakai 25 supaya aman
-    this.limiter = new RateLimiter(key ? 55 : 25, 2);
+    // key free ≈ 1 req/dtk dibagi dengan quote posisi (prioritas) → tokens cukup 15/menit; keyless 0.5 RPS → 25
+    this.limiter = new RateLimiter(key ? 15 : 25, 2);
   }
 
   async token(mint: string): Promise<JupToken | null> {

@@ -47,6 +47,13 @@ execution:
     mev_protect: true
     fallback_region: tokyo
   close_ata_after_exit: true
+  # Exit diputuskan dari quote jual Jupiter (executable). Harga DexScreener hanya "alarm" untuk minta quote segera,
+  # dan jadi cadangan kalau quote gagal > max_staleness_ms. Key Jupiter free ≈ 60 req/menit total.
+  quote_monitor:
+    enabled: true
+    interval_ms: 4000
+    max_staleness_ms: 20000
+    budget_per_min: 35
   confirm_timeout_ms: 20000
 
 paper:

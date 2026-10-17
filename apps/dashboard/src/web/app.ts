@@ -368,7 +368,7 @@ async function loadPositions() {
           return `<tr><td>${esc(p.id)}</td>
           <td>${p.symbol ? `<b>${esc(p.symbol)}</b> ` : ""}<a href="#" data-mint="${esc(mint)}"><code>${esc(short(mint))}</code></a></td>
           <td>${esc(p.profile)}</td><td>${dur(Date.now() - Number(p.openedAt))}</td><td>${sol(p.costSol)}</td>
-          <td>${pct(p.pnlPct)}</td><td>${pct(p.peakPnlPct)}</td><td>${(Number(p.soldFrac) * 100).toFixed(0)}%</td>
+          <td>${pct(p.pnlPct)} <span class="muted" title="sumber PnL">${p.pnlSource === "quote" ? `quote ${p.quoteAgeSec ?? "?"}dtk` : "estimasi"}</span></td><td>${pct(p.peakPnlPct)}</td><td>${(Number(p.soldFrac) * 100).toFixed(0)}%</td>
           <td>${esc(exitState || "–")}</td>
           <td><button type="button" class="btn small" data-close="${esc(p.id)}">Jual</button></td></tr>`;
         })

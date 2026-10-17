@@ -53,7 +53,14 @@ interface JupOrder {
 }
 
 export class PaperExecutor {
-  private quoteLimiter = new RateLimiter(30, 2); // berbagi key Jupiter dengan adapter tokens (±25/menit)
+  /**
+   * Key Jupiter (free) ≈ 1 req/dtk dibagi SEMUA endpoint (diukur 2026-10-17: jendela 10 req).
+   * Anggaran quote (entry, monitoring posisi, fill exit) diatur trade.execution.quote_monitor.budget_per_min;
+   * adapter tokens memakai sisa ±15/menit.
+   */
+  private quoteLimiter: RateLimiter;
+  private quotePausedUntil = 0;
+  quoteStats = { ok: 0, failed: 0, rateLimited: 0 };
   private decimals = new Map<string, number>();
 
   constructor(
@@ -62,7 +69,9 @@ export class PaperExecutor {
     private readonly market: (mint: string) => MarketView | null,
     private readonly onUsage: ApiUsageFn = () => {},
     private readonly random: () => number = Math.random,
-  ) {}
+  ) {
+    this.quoteLimiter = new RateLimiter(cfg().execution.quote_monitor.budget_per_min, 4);
+  }
 
   private async tokenDecimals(mint: string): Promise<number> {
     const c = this.decimals.get(mint);
@@ -76,6 +85,7 @@ export class PaperExecutor {
   private async quote(inputMint: string, outputMint: string, amountRaw: bigint): Promise<JupOrder | null> {
     const key = process.env.JUPITER_API_KEY;
     if (!key || amountRaw <= 0n) return null;
+    if (Date.now() < this.quotePausedUntil) await Bun.sleep(this.quotePausedUntil - Date.now());
     await this.quoteLimiter.take();
     const t0 = performance.now();
     let status = 0;
@@ -83,10 +93,24 @@ export class PaperExecutor {
       const url = `https://api.jup.ag/swap/v2/order?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountRaw}`;
       const res = await fetch(url, { headers: { "x-api-key": key }, signal: AbortSignal.timeout(6000) });
       status = res.status;
-      if (!res.ok) return null;
+      if (res.status === 429) {
+        this.quoteStats.rateLimited++;
+        this.quotePausedUntil = Date.now() + 3000;
+        return null;
+      }
+      if (!res.ok) {
+        this.quoteStats.failed++;
+        return null;
+      }
       const body = (await res.json()) as JupOrder;
-      return body.outAmount && !body.error ? body : null;
+      if (!body.outAmount || body.error) {
+        this.quoteStats.failed++;
+        return null;
+      }
+      this.quoteStats.ok++;
+      return body;
     } catch {
+      this.quoteStats.failed++;
       return null;
     } finally {
       this.onUsage("jupiter", "swap_v2_order_quote", status, Math.round(performance.now() - t0));
@@ -228,16 +252,8 @@ export class PaperExecutor {
     let feeBps: number;
     let impact: number | null;
     if (q?.outAmount) {
+      // quote Jupiter = harga eksekusi paling jujur (harga DexScreener untuk token baru sering basi/palsu)
       gross = Number(q.outAmount) / LAMPORTS;
-      // sanity: kalau quote jauh di atas estimasi pasar (data pool basi / quote liar), pakai yang konservatif
-      const m = this.market(mint);
-      if (m && m.priceSol > 0) {
-        const local =
-          tokens *
-          m.priceSol *
-          (1 - (this.localImpactPct(tokens * m.priceSol, m) + FALLBACK_POOL_FEE_PCT) / 100);
-        if (gross > local * 1.3) gross = local;
-      }
       route = "jupiter_quote";
       feeBps = q.feeBps ?? 0;
       impact = toNum(q.priceImpactPct) !== null ? Number(q.priceImpactPct) * 100 : null;
@@ -271,6 +287,24 @@ export class PaperExecutor {
       quoteOut: q?.outAmount ?? null,
       latencyMs: Math.round(performance.now() - t0),
     };
+  }
+
+  /**
+   * Nilai jual EXECUTABLE sekarang: quote Jupiter token→SOL untuk jumlah persis, dikurangi biaya jaringan exit
+   * (+ rent ATA kembali kalau menutup posisi). null kalau quote gagal / rate limit.
+   */
+  async quoteSellValue(
+    mint: string,
+    tokens: number,
+    closesPosition = true,
+  ): Promise<{ netSol: number; grossSol: number } | null> {
+    const decimals = await this.tokenDecimals(mint);
+    const raw = BigInt(Math.floor(tokens * 10 ** decimals));
+    const q = await this.quote(mint, SOL_MINT, raw);
+    if (!q?.outAmount) return null;
+    const gross = Number(q.outAmount) / LAMPORTS;
+    const rent = closesPosition && this.cfg().execution.close_ata_after_exit ? ATA_RENT_SOL : 0;
+    return { grossSol: gross, netSol: gross - this.networkFeeSol("exit", false) + rent };
   }
 
   /** Estimasi biaya exit (%) untuk monitoring PnL tiap tick tanpa memanggil API. */
