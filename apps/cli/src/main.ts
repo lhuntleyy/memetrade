@@ -4,15 +4,18 @@ import { despike } from "../../core/src/market/despike.ts";
 import { PathStats } from "../../core/src/market/path-stats.ts";
 import {
   bucketize,
+  costForLiquidity,
   type DatasetRow,
   delayRows,
   groupStats,
+  loadCostModel,
   loadDataset,
   loadPathCandidates,
   numericFeatures,
   ruleLabel,
   searchRules,
   spearman,
+  verdict,
   walkForwardDelay,
   walkForwardRules,
 } from "../../core/src/research/features.ts";
@@ -131,8 +134,19 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
       const exit = strategy.exits.quick_flip ?? Object.values(strategy.exits)[0]!;
       const db = createDb(process.env.DATABASE_URL_RO ?? process.env.DATABASE_URL, { max: 2 });
       try {
-        const replay = { latencySec: 1, entryCostPct: 2, exitCostPct: 2 };
-        const rows = await loadDataset(db, { hours, exit, replay, horizonSec: exit.max_hold_sec + 60 });
+        // biaya: terukur dari cost probe per likuiditas (fallback 4% kalau probe belum cukup)
+        const costModel = await loadCostModel(db, Math.max(hours, 72), 4);
+        const half = (c: number) => ({ entryCostPct: c / 2, exitCostPct: c / 2 });
+        const replay = { latencySec: 1, ...half(costModel.overallPct) };
+        const liqOf = (f: Record<string, unknown>) =>
+          typeof f.liquidity_usd === "number" ? (f.liquidity_usd as number) : null;
+        const rows = await loadDataset(db, {
+          hours,
+          exit,
+          replay,
+          horizonSec: exit.max_hold_sec + 60,
+          costFor: (f) => half(costForLiquidity(costModel, liqOf(f))),
+        });
         const groups: [string, (r: DatasetRow) => boolean][] = [
           ["Token baru pump.fun (pumpportal.new_token)", (r) => r.source === "pumpportal.new_token"],
           ["Migrasi pump.fun (pumpportal.migration)", (r) => r.source === "pumpportal.migration"],
@@ -148,8 +162,19 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         );
         p("");
         p(
-          `Target = PnL replay exit \`quick_flip\` (TP +30%, trailing dari +20% jarak 4, SL −15%, momentum-fail 3 mnt, max hold 30 mnt) kalau masuk ±1 dtk setelah token dievaluasi, biaya entry 2% + exit 2%. Token yang gagal security dikeluarkan.`,
+          `Target = PnL replay exit \`quick_flip\` (TP +30%, trailing dari +20% jarak 4, SL −15%, momentum-fail 3 mnt, max hold 30 mnt) kalau masuk ±1 dtk setelah token dievaluasi, biaya round-trip ${costModel.source === "terukur" ? "TERUKUR (cost probe) per likuiditas token saat dievaluasi" : "asumsi 4% (probe belum cukup)"}. Token yang gagal security dikeluarkan.`,
         );
+        p("");
+        p(
+          `Model biaya (median round-trip, posisi 0,1 SOL, termasuk jaringan): keseluruhan ${costModel.overallPct}%`,
+        );
+        p("");
+        p("| Likuiditas | probe | median |");
+        p("|---|---|---|");
+        for (const b of costModel.buckets)
+          p(
+            `| $${b.lo / 1000}rb – ${Number.isFinite(b.hi) ? `$${b.hi / 1000}rb` : "∞"} | ${b.n} | ${Number.isFinite(b.medianPct) ? `${b.medianPct}%` : "– (pakai bucket terdekat di bawah / keseluruhan)"} |`,
+          );
         p("");
         p(
           `Total baris: ${rows.length} · dengan data harga setelah entry: ${rows.filter((r) => r.pnl !== null).length}`,
@@ -215,6 +240,63 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
           p("");
           p(`Rule paling sering terpilih: \`${wf.mostChosen}\``);
         }
+        // ---- fokus: token likuid (likuiditas saat evaluasi ≥ $30k) ----
+        p("");
+        p("## Edge di token likuid (likuiditas saat evaluasi ≥ $30k)");
+        p("");
+        p(
+          "Kesimpulan otomatis: **ada edge** hanya kalau walk-forward out-of-sample punya mean > 0 dan median > −2% dari ≥ 30 trade.",
+        );
+        const liquid = rows.filter((r) => (liqOf(r.features) ?? 0) >= 30_000);
+        const liqGroups: [string, (r: DatasetRow) => boolean][] = [
+          ["Semua sumber", () => true],
+          ["Migrasi", (r) => r.source === "pumpportal.migration"],
+          ["DexScreener", (r) => r.source.startsWith("dexscreener.")],
+          ["Smart money", (r) => r.source.startsWith("wallet.")],
+        ];
+        const verdictLines: string[] = [];
+        for (const [name, pred] of liqGroups) {
+          const traded = liquid.filter(pred).filter((r) => r.pnl !== null);
+          const base = groupStats(traded);
+          p("");
+          p(`### ${name}`);
+          p("");
+          p(`**Tanpa filter tambahan:** ${st(base)}`);
+          let oos = base;
+          if (traded.length >= 40) {
+            const feats = numericFeatures(traded, 0.3);
+            const wf = walkForwardRules(traded, feats, 4, Math.max(8, Math.floor(traded.length * 0.08)));
+            p("");
+            p(
+              `Walk-forward rule: ${wf.folds.map((f) => `fold ${f.fold}: \`${f.chosen}\` → ${f.test.meanPnl ?? "–"}% (n ${f.test.n})`).join(" · ")}`,
+            );
+            p("");
+            p(`**OOS dengan rule:** ${st(wf.oos)} · **OOS tanpa filter:** ${st(wf.oosBaseline)}`);
+            oos =
+              (wf.oos.meanPnl ?? -1e9) > (wf.oosBaseline.meanPnl ?? -1e9) && wf.oos.n >= 30
+                ? wf.oos
+                : wf.oosBaseline;
+          }
+          const v = verdict(oos);
+          const label = {
+            ada_edge: "✅ ADA EDGE",
+            tidak_ada_edge: "❌ tidak ada edge",
+            data_kurang: "⏳ data kurang",
+          }[v.verdict];
+          p("");
+          p(`**Kesimpulan: ${label}** — ${v.reason}`);
+          verdictLines.push(`- ${name}: **${label}** — ${v.reason}`);
+        }
+        // ringkasan di atas laporan
+        md.splice(
+          2,
+          0,
+          "## Ringkasan kesimpulan otomatis (token likuid ≥ $30k, biaya terukur)",
+          "",
+          ...verdictLines,
+          "",
+        );
+
         // ---- uji waktu entry: semua trigger dengan jalur harga (bukan hanya yang dievaluasi) ----
         const delays = [0.5, 2, 5, 10, 15, 20];
         const paths = await loadPathCandidates(db, hours, 60);

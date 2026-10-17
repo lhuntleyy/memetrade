@@ -171,6 +171,10 @@
           <button type="submit">Jalankan</button>
         </form>
         <p class="muted">Replay exit engine yang sama dengan paper trading di atas tick rekaman (sudah difilter spike). Entry = tick pertama ±1 dtk setelah keputusan. Sel = expectancy %/trade setelah biaya (win rate).</p>
+        <h2>Laporan analisa harian</h2>
+        <p class="muted">Dibuat otomatis tiap 24 jam oleh <code>memebot-analyze.timer</code> (fitur → PnL, walk-forward, biaya terukur, kesimpulan edge token likuid).</p>
+        <div class="toolbar"><select id="rep-list"></select> <button type="button" class="btn" id="rep-open">Buka</button></div>
+        <div id="rep-view"></div>
         <h2>Biaya eksekusi terukur (quote Jupiter beli → jual, 24 jam)</h2>
         <p class="muted">Pakai angka ini untuk kolom "Biaya entry/exit %" (setengah dari total round-trip). Quote jual dihitung di pool sebelum beli kita → sedikit melebihkan impact (konservatif).</p>
         <div id="bt-costs" class="scroll"></div>

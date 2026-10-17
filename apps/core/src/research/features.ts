@@ -35,7 +35,14 @@ const SKIP = new Set([
 
 export async function loadDataset(
   db: Db,
-  opts: { hours: number; exit: ExitConfig; replay: ReplayOptions; horizonSec: number },
+  opts: {
+    hours: number;
+    exit: ExitConfig;
+    replay: ReplayOptions;
+    horizonSec: number;
+    /** model biaya per baris (mis. dari cost probe per likuiditas); default = opts.replay */
+    costFor?: (features: Record<string, FeatureValue>) => { entryCostPct: number; exitCostPct: number };
+  },
 ): Promise<DatasetRow[]> {
   const rows = (await db`
     SELECT DISTINCT ON (d.mint, d.trigger_ts) d.mint, d.trigger_source AS source, d.ts, d.features,
@@ -68,12 +75,10 @@ export async function loadDataset(
   for (const [m, list] of ticks) ticks.set(m, despike(list, m));
   return usable.map((r) => {
     const ts = new Date(r.ts).getTime();
-    const trade = simulate(
-      { mint: r.mint, profile: r.source, ts },
-      ticks.get(r.mint) ?? [],
-      opts.exit,
-      opts.replay,
-    );
+    const trade = simulate({ mint: r.mint, profile: r.source, ts }, ticks.get(r.mint) ?? [], opts.exit, {
+      ...opts.replay,
+      ...(opts.costFor ? opts.costFor(r.features ?? {}) : {}),
+    });
     const features: Record<string, FeatureValue> = {};
     for (const [k, v] of Object.entries(r.features ?? {})) if (!SKIP.has(k)) features[k] = v;
     return {
@@ -435,4 +440,71 @@ export function walkForwardDelay(
     });
   }
   return { folds: out, oos: groupStats(oos), oosDelay0: groupStats(zero) };
+}
+
+export interface CostModel {
+  /** median biaya round-trip (%) per bucket likuiditas, dari cost probe */
+  buckets: { lo: number; hi: number; medianPct: number; n: number }[];
+  overallPct: number;
+  fallbackPct: number;
+  source: "terukur" | "asumsi";
+}
+
+export const LIQ_EDGES = [0, 10_000, 30_000, 50_000, 100_000, Number.POSITIVE_INFINITY];
+
+/** Model biaya dari cost probe (bucket dengan < minN probe memakai median keseluruhan / fallback). */
+export async function loadCostModel(db: Db, hours: number, fallbackPct = 4, minN = 5): Promise<CostModel> {
+  const rows = (await db`
+    SELECT liquidity_usd::float AS liq, total_cost_pct AS cost FROM cost_probes
+    WHERE error IS NULL AND liquidity_usd IS NOT NULL AND total_cost_pct IS NOT NULL
+      AND ts > now() - make_interval(hours => ${hours})`) as { liq: number; cost: number }[];
+  const med = (xs: number[]) => {
+    const a = [...xs].sort((x, y) => x - y);
+    const m = Math.floor(a.length / 2);
+    return a.length % 2 ? a[m]! : (a[m - 1]! + a[m]!) / 2;
+  };
+  const overall = rows.length >= minN ? med(rows.map((r) => r.cost)) : fallbackPct;
+  const buckets = LIQ_EDGES.slice(0, -1).map((lo, i) => {
+    const hi = LIQ_EDGES[i + 1]!;
+    const xs = rows.filter((r) => r.liq >= lo && r.liq < hi).map((r) => r.cost);
+    return {
+      lo,
+      hi,
+      n: xs.length,
+      medianPct: xs.length >= minN ? Math.round(med(xs) * 100) / 100 : Number.NaN,
+    };
+  });
+  return {
+    buckets,
+    overallPct: Math.round(overall * 100) / 100,
+    fallbackPct,
+    source: rows.length >= minN ? "terukur" : "asumsi",
+  };
+}
+
+/** Biaya round-trip (%) untuk likuiditas tertentu: bucket terukur → median keseluruhan → fallback. */
+export function costForLiquidity(model: CostModel, liq: number | null): number {
+  if (liq === null || !Number.isFinite(liq)) return model.overallPct;
+  const b = model.buckets.find((x) => liq >= x.lo && liq < x.hi);
+  if (b && Number.isFinite(b.medianPct)) return b.medianPct;
+  // bucket likuid belum ada data → pakai bucket terukur terdekat di bawahnya (konservatif: biaya lebih tinggi)
+  const below = model.buckets.filter((x) => x.hi <= liq && Number.isFinite(x.medianPct)).pop();
+  return below?.medianPct ?? model.overallPct;
+}
+
+export type Verdict = "ada_edge" | "tidak_ada_edge" | "data_kurang";
+
+/** Kesimpulan otomatis: edge hanya kalau out-of-sample walk-forward positif dengan sampel cukup. */
+export function verdict(oos: GroupStats, minTrades = 30): { verdict: Verdict; reason: string } {
+  if (oos.n < minTrades)
+    return { verdict: "data_kurang", reason: `baru ${oos.n} trade out-of-sample (< ${minTrades})` };
+  if ((oos.meanPnl ?? 0) > 0 && (oos.medianPnl ?? -1) > -2)
+    return {
+      verdict: "ada_edge",
+      reason: `OOS mean ${oos.meanPnl}% & median ${oos.medianPnl}% dari ${oos.n} trade`,
+    };
+  return {
+    verdict: "tidak_ada_edge",
+    reason: `OOS mean ${oos.meanPnl}% / median ${oos.medianPnl}% dari ${oos.n} trade`,
+  };
 }

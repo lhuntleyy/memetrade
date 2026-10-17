@@ -578,8 +578,65 @@ async function loadCosts() {
     : `<p class="muted">Belum ada probe — jalan otomatis tiap 60 dtk untuk token yang baru dievaluasi.</p>`;
 }
 
+async function loadReportList() {
+  const files = await getJson<string[]>("/api/reports");
+  $("#rep-list").innerHTML = files.length
+    ? files.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("")
+    : `<option value="">(belum ada laporan)</option>`;
+}
+
+/** Render markdown sederhana (judul, tabel, tebal, kode) — isi laporan buatan bot sendiri, tetap di-escape. */
+function miniMarkdown(md: string) {
+  const inline = (t: string) =>
+    esc(t)
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/_(.+?)_/g, "<i>$1</i>");
+  const out: string[] = [];
+  let table: string[][] = [];
+  const flush = () => {
+    if (!table.length) return;
+    const [head, , ...body] = table;
+    out.push(
+      `<div class="scroll"><table><thead><tr>${(head ?? []).map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${body
+        .map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`)
+        .join("")}</tbody></table></div>`,
+    );
+    table = [];
+  };
+  for (const line of md.split("\n")) {
+    if (line.startsWith("|")) {
+      table.push(
+        line
+          .split("|")
+          .slice(1, -1)
+          .map((c) => c.trim()),
+      );
+      continue;
+    }
+    flush();
+    if (line.startsWith("### ")) out.push(`<h3 class="sub">${inline(line.slice(4))}</h3>`);
+    else if (line.startsWith("## ")) out.push(`<h2>${inline(line.slice(3))}</h2>`);
+    else if (line.startsWith("# ")) out.push(`<h2>${inline(line.slice(2))}</h2>`);
+    else if (line.startsWith("- ")) out.push(`<div>• ${inline(line.slice(2))}</div>`);
+    else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  flush();
+  return out.join("");
+}
+
+$("#rep-open").addEventListener("click", async () => {
+  const name = $<HTMLSelectElement>("#rep-list").value;
+  if (!name) return;
+  const r = await fetch(`/api/reports/${encodeURIComponent(name)}`);
+  $("#rep-view").innerHTML = r.ok
+    ? miniMarkdown(await r.text())
+    : `<p class="muted">Gagal memuat laporan.</p>`;
+});
+
 async function initBacktest() {
   void loadCosts();
+  void loadReportList();
   if (btProfilesLoaded) return;
   const f = await getJson<{ funnel: Row[] }>("/api/pipeline?hours=168");
   const sel = $<HTMLSelectElement>("#bt-profile");

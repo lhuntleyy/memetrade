@@ -1,0 +1,11 @@
+[Unit]
+Description=Jalankan analisa memebot 24 jam setelah diaktifkan, lalu tiap 24 jam
+
+[Timer]
+OnActiveSec=24h
+OnUnitActiveSec=24h
+AccuracySec=1min
+Unit=memebot-analyze.service
+
+[Install]
+WantedBy=timers.target

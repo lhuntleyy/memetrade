@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import { createDb } from "@memebot/db";
 import { createLogger, loadConfig } from "@memebot/shared";
 import { loadReplayData, runReplay, sweepTpSl, walkForward } from "../../core/src/research/replay.ts";
@@ -46,6 +47,8 @@ const guard =
   (h: Handler): Handler =>
   async (req) =>
     (await auth.isAuthed(req)) ? h(req) : Response.json({ error: "unauthorized" }, { status: 401 });
+
+const REPORT_DIR = process.env.MEMEBOT_REPORT_DIR ?? "/var/lib/memebot/reports";
 
 const clampInt = (v: string | null, def: number, min: number, max: number) =>
   Math.min(max, Math.max(min, Number.parseInt(v ?? "", 10) || def));
@@ -277,6 +280,24 @@ const server = Bun.serve({
       const hours = clampInt(new URL(req.url).searchParams.get("hours"), 24, 1, 24 * 30);
       const [buckets, [counts]] = await Promise.all([costByLiquidity(db, hours), costProbeCounts(db, hours)]);
       return Response.json({ buckets, counts });
+    }),
+    "/api/reports": guard(async () => {
+      const files = await readdir(REPORT_DIR).catch(() => [] as string[]);
+      return Response.json(
+        files
+          .filter((f) => /^analisa-[\d-]+\.md$/.test(f))
+          .sort()
+          .reverse()
+          .slice(0, 30),
+      );
+    }),
+    "/api/reports/:name": guard(async (req) => {
+      const name = (req as Request & { params: { name: string } }).params.name;
+      if (!/^(analisa-[\d-]+|terbaru)\.md$/.test(name))
+        return Response.json({ error: "nama tidak valid" }, { status: 400 });
+      const f = Bun.file(`${REPORT_DIR}/${name}`);
+      if (!(await f.exists())) return Response.json({ error: "belum ada laporan" }, { status: 404 });
+      return new Response(await f.text(), { headers: { "content-type": "text/markdown; charset=utf-8" } });
     }),
     "/api/system/events": guard(async () =>
       Response.json(
