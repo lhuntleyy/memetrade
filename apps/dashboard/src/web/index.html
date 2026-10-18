@@ -168,6 +168,7 @@
           SL <input id="bt-sls" value="10,15,20,30" size="10" />
           Biaya entry/exit % <input id="bt-cost" value="1.5" size="3" />
           Walk-forward fold <input id="bt-folds" value="4" size="2" />
+          <label title="Batas profit di level TP + potongan per sumber dari perbandingan dengan paper trading (calibrate --save)"><input type="checkbox" id="bt-cal" checked /> kalibrasi ke paper</label>
           <button type="submit">Jalankan</button>
         </form>
         <p class="muted">Replay exit engine yang sama dengan paper trading di atas tick rekaman (sudah difilter spike). Entry = tick pertama ±1 dtk setelah keputusan. Sel = expectancy %/trade setelah biaya (win rate).</p>

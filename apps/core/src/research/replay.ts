@@ -25,6 +25,19 @@ export interface ReplayOptions {
   latencySec: number;
   entryCostPct: number;
   exitCostPct: number;
+  /**
+   * Kalibrasi dari paper trading: tambahan rugi (poin %) per alasan exit, mis. hard_sl = gap saat dump
+   * (harga DexScreener tertinggal, quote jual asli jauh lebih rendah). Positif = lebih buruk.
+   */
+  exitGapPct?: Partial<Record<string, number>>;
+  /**
+   * Batasi profit per penjualan di level TP tertinggi (+ capTpSlackPct). Lonjakan antar-tick DexScreener (sebagian
+   * palsu) membuat replay "menjual" jauh di atas TP, padahal paper (quote tiap ±4 dtk) rata-rata keluar ≈ level TP.
+   */
+  capProfitAtTp?: boolean;
+  capTpSlackPct?: number;
+  /** potongan rata (poin %) per trade: selisih rata-rata paper vs replay yang tidak dijelaskan model (rug, data basi) */
+  flatHaircutPct?: number;
 }
 
 export interface ReplayTrade {
@@ -75,14 +88,19 @@ export function simulate(
     if (a.type === "sell") {
       const before = 1 - state.soldFrac;
       applySell(state, a);
-      realized += (before - (1 - state.soldFrac)) * a.pnlPct;
+      let pnl = a.pnlPct;
+      if (o.capProfitAtTp && exit.take_profit_ladder.length) {
+        const cap = Math.max(...exit.take_profit_ladder.map((l) => l.at_pct)) + (o.capTpSlackPct ?? 0);
+        pnl = Math.min(pnl, cap);
+      }
+      realized += (before - (1 - state.soldFrac)) * (pnl - (o.exitGapPct?.[a.reason] ?? 0));
       if (state.soldFrac >= 0.999)
         return {
           mint: c.mint,
           profile: c.profile,
           entryTs: first.ts,
           exitTs: t.ts,
-          pnlPct: realized,
+          pnlPct: realized - (o.flatHaircutPct ?? 0),
           reason: a.reason,
           peakPct: state.peakPnlPct,
         };
@@ -90,13 +108,15 @@ export function simulate(
   }
   // data habis sebelum exit → tutup di tick terakhir
   const rest = 1 - state.soldFrac;
-  const lastPnl = ((last.price * (1 - o.exitCostPct / 100)) / state.entryPrice - 1) * 100;
+  // data harga berhenti sebelum exit: sering berarti pair hilang / likuiditas ditarik (rug) → gap kalibrasi "data_end"
+  const lastPnl =
+    ((last.price * (1 - o.exitCostPct / 100)) / state.entryPrice - 1) * 100 - (o.exitGapPct?.data_end ?? 0);
   return {
     mint: c.mint,
     profile: c.profile,
     entryTs: first.ts,
     exitTs: last.ts,
-    pnlPct: realized + rest * lastPnl,
+    pnlPct: realized + rest * lastPnl - (o.flatHaircutPct ?? 0),
     reason: "data_end",
     peakPct: state.peakPnlPct,
   };

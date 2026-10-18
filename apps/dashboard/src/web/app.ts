@@ -657,11 +657,14 @@ $("#bt-form").addEventListener("submit", async (ev) => {
     entry_cost: cost,
     exit_cost: cost,
     wf_folds: $<HTMLInputElement>("#bt-folds").value,
+    calibrated: $<HTMLInputElement>("#bt-cal").checked ? "1" : "0",
   });
   $("#bt-result").innerHTML = `<p class="muted">Menghitung…</p>`;
   const r = await getJson<{
     candidates: number;
     exitRef: string;
+    options: Row;
+    calibration: { method: string | null } | null;
     current: Row;
     tps: number[];
     sls: number[];
@@ -703,6 +706,12 @@ $("#bt-form").addEventListener("submit", async (ev) => {
       m.expectancyPct === null ? null : Number(m.expectancyPct) > 0,
       [
         ["kandidat / trade", `${r.candidates} / ${m.trades}`],
+        [
+          "kalibrasi",
+          r.calibration
+            ? `${esc(r.calibration.method ?? "?")} · potong ${r.options.flatHaircutPct ?? 0} poin${r.options.capProfitAtTp ? " · profit ≤ TP" : ""}`
+            : "mentah",
+        ],
         ["win rate", m.winRate !== null ? `${m.winRate}%` : "–"],
         ["expectancy / trade", m.expectancyPct !== null ? `${m.expectancyPct}%` : "–"],
         ["median / trade", m.medianPct !== null ? `${m.medianPct}%` : "–"],

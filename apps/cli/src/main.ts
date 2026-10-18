@@ -3,6 +3,17 @@ import { ConfigError, configSchemas, loadConfig } from "@memebot/shared";
 import { despike } from "../../core/src/market/despike.ts";
 import { PathStats } from "../../core/src/market/path-stats.ts";
 import {
+  calibrationOptions,
+  compareTrades,
+  fitExitGaps,
+  fitSourceHaircuts,
+  latestCalibration,
+  loadPaperTrades,
+  loadTicksFor,
+  sourceGroup as sourceGroupOf,
+  summarizeGap,
+} from "../../core/src/research/calibration.ts";
+import {
   bucketize,
   costForLiquidity,
   type DatasetRow,
@@ -60,7 +71,19 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
           universe: universeArg === "evaluated" ? "evaluated" : "passed",
           horizonSec: exit.max_hold_sec + 60,
         });
-        const opts = { latencySec: 1, entryCostPct: 1.5, exitCostPct: 1.5 };
+        // kalibrasi ke paper trading (calibrate --save): batas profit di TP + potongan per sumber
+        const cal = await latestCalibration(db);
+        const opts = {
+          latencySec: 1,
+          entryCostPct: 1.5,
+          exitCostPct: 1.5,
+          ...calibrationOptions(cal, profile),
+        };
+        console.log(
+          cal
+            ? `replay dikalibrasi: ${JSON.stringify(calibrationOptions(cal, profile))}`
+            : "replay BELUM dikalibrasi",
+        );
         const r = runReplay(data, exit, opts);
         console.log(`kandidat ${data.candidates.length}, mint dengan tick ${data.ticks.size}`);
         console.log("exit config sekarang:", r.metrics);
@@ -138,6 +161,8 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         const costModel = await loadCostModel(db, Math.max(hours, 72), 4);
         const half = (c: number) => ({ entryCostPct: c / 2, exitCostPct: c / 2 });
         const replay = { latencySec: 1, ...half(costModel.overallPct) };
+        // kalibrasi ke paper trading (calibrate --save): batas profit di TP + potongan per sumber
+        const cal = await latestCalibration(db);
         const liqOf = (f: Record<string, unknown>) =>
           typeof f.liquidity_usd === "number" ? (f.liquidity_usd as number) : null;
         const rows = await loadDataset(db, {
@@ -145,7 +170,10 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
           exit,
           replay,
           horizonSec: exit.max_hold_sec + 60,
-          costFor: (f) => half(costForLiquidity(costModel, liqOf(f))),
+          costFor: (f, src) => ({
+            ...half(costForLiquidity(costModel, liqOf(f))),
+            ...calibrationOptions(cal, src),
+          }),
         });
         const groups: [string, (r: DatasetRow) => boolean][] = [
           ["Token baru pump.fun (pumpportal.new_token)", (r) => r.source === "pumpportal.new_token"],
@@ -162,7 +190,7 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         );
         p("");
         p(
-          `Target = PnL replay exit \`quick_flip\` (TP +30%, trailing dari +20% jarak 4, SL −15%, momentum-fail 3 mnt, max hold 30 mnt) kalau masuk ±1 dtk setelah token dievaluasi, biaya round-trip ${costModel.source === "terukur" ? "TERUKUR (cost probe) per likuiditas token saat dievaluasi" : "asumsi 4% (probe belum cukup)"}. Token yang gagal security dikeluarkan.`,
+          `Target = PnL replay exit \`quick_flip\` (TP +30%, trailing dari +20% jarak 4, SL −15%, momentum-fail 3 mnt, max hold 30 mnt) kalau masuk ±1 dtk setelah token dievaluasi, biaya round-trip ${costModel.source === "terukur" ? "TERUKUR (cost probe) per likuiditas token saat dievaluasi" : "asumsi 4% (probe belum cukup)"}. ${cal ? `Replay DIKALIBRASI ke paper trading (metode ${cal.method ?? "?"}: profit dibatasi di level TP, potongan per sumber ${JSON.stringify(cal.sourceHaircutPct ?? {})} poin/trade).` : "Replay BELUM dikalibrasi ke paper trading (jalankan calibrate --save)."} Token yang gagal security dikeluarkan.`,
         );
         p("");
         p(
@@ -313,19 +341,20 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
         ];
         for (const [name, pred] of srcGroups) {
           const sub = { cands: paths.cands.filter((c) => pred(c.source)), ticks: paths.ticks };
+          const groupReplay = { ...replay, ...calibrationOptions(cal, sub.cands[0]?.source ?? "") };
           p("");
           p(`### ${name} (${sub.cands.length} trigger)`);
           p("");
           p("| Masuk setelah | trade | mean PnL | median | win | puncak≥25% | kena SL |");
           p("|---|---|---|---|---|---|---|");
           for (const d of delays) {
-            const g = groupStats(delayRows(sub, d, exit, replay));
+            const g = groupStats(delayRows(sub, d, exit, groupReplay));
             p(
               `| ${d} menit | ${g.n} | ${g.meanPnl ?? "–"}% | ${g.medianPnl ?? "–"}% | ${g.winRate ?? "–"}% | ${g.hit25 ?? "–"}% | ${g.slRate ?? "–"}% |`,
             );
           }
           if (sub.cands.length >= 60) {
-            const wf = walkForwardDelay(sub, delays, exit, replay, 4, 15);
+            const wf = walkForwardDelay(sub, delays, exit, groupReplay, 4, 15);
             p("");
             p(
               `Walk-forward pilihan delay: ${wf.folds.map((f) => `fold ${f.fold}: ${f.chosen} mnt → ${f.test.meanPnl ?? "–"}% (n ${f.test.n})`).join(" · ")}`,
@@ -367,7 +396,12 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
           const sub = { cands: paths.cands.filter((c) => pred(c.source)), ticks: paths.ticks };
           const cells = [1, 2, 3, 4].map((c) => {
             const g = groupStats(
-              delayRows(sub, 0.5, exit, { latencySec: 1, entryCostPct: c / 2, exitCostPct: c / 2 }),
+              delayRows(sub, 0.5, exit, {
+                latencySec: 1,
+                entryCostPct: c / 2,
+                exitCostPct: c / 2,
+                ...calibrationOptions(cal, sub.cands[0]?.source ?? ""),
+              }),
             );
             return `${g.meanPnl ?? "–"}% (med ${g.medianPnl ?? "–"}%)`;
           });
@@ -378,6 +412,212 @@ const commands: Record<string, { help: string; run: (args: string[]) => Promise<
           await Bun.write(outPath, `${text}\n`);
           console.log(`laporan ditulis ke ${outPath}`);
         } else console.log(text);
+        return 0;
+      } finally {
+        await db.close();
+      }
+    },
+  },
+  calibrate: {
+    help: "bandingkan paper vs replay per trade & hitung gap exit: calibrate [jam=48] [--save] [--since=ISO] [file-laporan]",
+    async run(args) {
+      const save = args.includes("--save");
+      const sinceArg = args.find((a) => a.startsWith("--since="))?.slice(8);
+      // default: sejak exit berbasis quote Jupiter aktif (commit ddc593e, 2026-10-17 ±01:00 UTC)
+      const since = new Date(sinceArg ?? "2026-10-17T01:00:00Z");
+      const rest = args.filter((a) => a !== "--save" && !a.startsWith("--since="));
+      const hours = Number(rest[0] ?? 48);
+      const outPath = rest[1];
+      const strategy = (await loadConfig("strategy")).data;
+      const exitFor = (profile: string) => {
+        const p = strategy.profiles[profile];
+        return p ? strategy.exits[p.exits.ref.replace(/^exits\./, "")] : undefined;
+      };
+      const db = createDb(process.env.DATABASE_URL, { max: 2 });
+      try {
+        const trades = await loadPaperTrades(db, hours, since);
+        const ticks = await loadTicksFor(db, [...new Set(trades.map((t) => t.mint))], hours);
+        const costs = await loadCostModel(db, Math.max(hours, 72), 4);
+        const raw = compareTrades(trades, ticks, exitFor, costs, { latencySec: 1 });
+        const sRaw = summarizeGap(raw);
+        // langkah 1 (struktural): profit dibatasi di level TP
+        const base = { latencySec: 1, capProfitAtTp: true };
+        const before = compareTrades(trades, ticks, exitFor, costs, base);
+        const sb = summarizeGap(before);
+        // validasi silang: gap dari separuh pertama (urut waktu), diuji di separuh kedua
+        const half = Math.floor(before.length / 2);
+        const gapsTrain = fitExitGaps(before.slice(0, half), 5);
+        const testBefore = summarizeGap(before.slice(half));
+        const testAfter = summarizeGap(
+          compareTrades(trades.slice(half), ticks, exitFor, costs, { ...base, exitGapPct: gapsTrain }),
+        );
+        // pendekatan B: potongan rata per trade (lebih stabil kalau selisih didominasi segelintir rug)
+        const trainSum = summarizeGap(before.slice(0, half));
+        const flatTrain = Math.max(0, -(trainSum.gap ?? 0));
+        const testFlat = summarizeGap(
+          compareTrades(trades.slice(half), ticks, exitFor, costs, { ...base, flatHaircutPct: flatTrain }),
+        );
+        const err = (x: { replayMean: number | null; paperMean: number | null }) =>
+          Math.abs((x.replayMean ?? 0) - (x.paperMean ?? 0));
+        const errNone = err(testBefore);
+        const errGap = err(testAfter);
+        const errFlat = err(testFlat);
+        // pendekatan C: potongan per kelompok sumber (selisih ternyata beda arah per sumber)
+        const srcTrain = fitSourceHaircuts(before.slice(0, half));
+        const testSrc = summarizeGap(
+          compareTrades(trades.slice(half), ticks, exitFor, costs, { ...base }).map((x) => ({
+            ...x,
+            replayPnlPct:
+              x.replayPnlPct === null ? null : x.replayPnlPct - (srcTrain[sourceGroupOf(x.profile)] ?? 0),
+          })),
+        );
+        // error per kelompok sumber (bukan rata-rata total, supaya kesalahan beda arah tidak saling menutupi)
+        const groupErr = (cmp: { profile: string; paperPnlPct: number; replayPnlPct: number | null }[]) => {
+          const groups = [...new Set(cmp.map((x) => sourceGroupOf(x.profile)))];
+          let sum = 0;
+          let n = 0;
+          for (const g of groups) {
+            const sub = cmp.filter((x) => sourceGroupOf(x.profile) === g && x.replayPnlPct !== null);
+            if (!sub.length) continue;
+            const d = sub.reduce((a, x) => a + (x.replayPnlPct! - x.paperPnlPct), 0) / sub.length;
+            sum += Math.abs(d) * sub.length;
+            n += sub.length;
+          }
+          return n ? sum / n : 0;
+        };
+        const secondHalf = before.slice(half);
+        const gErrNone = groupErr(secondHalf);
+        const gErrSrc = groupErr(
+          secondHalf.map((x) => ({
+            ...x,
+            replayPnlPct:
+              x.replayPnlPct === null ? null : x.replayPnlPct - (srcTrain[sourceGroupOf(x.profile)] ?? 0),
+          })),
+        );
+        const method =
+          gErrSrc < gErrNone
+            ? "source"
+            : errFlat <= errGap && errFlat <= errNone
+              ? "flat"
+              : errGap < errNone
+                ? "gap"
+                : "none";
+        const gaps = fitExitGaps(before, 8);
+        const flatAll = Math.round(Math.max(0, -(sb.gap ?? 0)) * 10) / 10;
+        const srcAll = fitSourceHaircuts(before);
+        const chosen =
+          method === "source"
+            ? base
+            : method === "flat"
+              ? { ...base, flatHaircutPct: flatAll }
+              : method === "gap"
+                ? { ...base, exitGapPct: gaps }
+                : base;
+        const after = compareTrades(trades, ticks, exitFor, costs, chosen).map((x) =>
+          method === "source" && x.replayPnlPct !== null
+            ? { ...x, replayPnlPct: x.replayPnlPct - (srcAll[sourceGroupOf(x.profile)] ?? 0) }
+            : x,
+        );
+        const sa = summarizeGap(after);
+        const slips = trades
+          .map((t) => t.entrySlipPct)
+          .filter((v): v is number => v !== null)
+          .sort((a, b) => a - b);
+        const medSlip = slips.length ? slips[Math.floor(slips.length / 2)]! : null;
+        const md: string[] = [];
+        const p = (x: string) => md.push(x);
+        p(
+          `# Kalibrasi backtest vs paper trading (${new Date().toISOString().slice(0, 16)} UTC, ${hours} jam)`,
+        );
+        p("");
+        p(
+          `Posisi paper tutup: ${trades.length}, bisa di-replay: ${sb.n}. Replay = exit engine & config yang sama, entry di waktu order beli paper (+1 dtk), biaya terukur per likuiditas.`,
+        );
+        p("");
+        p(
+          `- Slippage entry paper vs harga DexScreener (median): ${medSlip === null ? "–" : `${medSlip.toFixed(2)}%`} (${slips.length} trade)`,
+        );
+        p(`- Alasan exit sama di paper & replay: ${sb.sameReasonPct}%`);
+        p("");
+        p("## Sebelum kalibrasi");
+        p("");
+        p(
+          `Replay mentah (tanpa batas TP): paper ${sRaw.paperMean}% vs replay ${sRaw.replayMean}% → selisih ${sRaw.gap} poin. Di bawah ini profit replay sudah dibatasi di level TP.`,
+        );
+        p("");
+        p(
+          `Rata-rata PnL/trade: **paper ${sb.paperMean}%** vs **replay ${sb.replayMean}%** → selisih ${sb.gap} poin`,
+        );
+        p("");
+        p("| Alasan exit (paper) | n | paper | replay | selisih |");
+        p("|---|---|---|---|---|");
+        for (const [k, v] of Object.entries(sb.byPaperReason).sort((a, b) => b[1].n - a[1].n))
+          p(`| ${k} | ${v.n} | ${v.paperMean}% | ${v.replayMean}% | ${v.gap} |`);
+        p("");
+        p("## Gap exit hasil kalibrasi (poin % tambahan rugi di replay)");
+        p("");
+        p(
+          Object.keys(gaps).length
+            ? Object.entries(gaps)
+                .map(([k, v]) => `- \`${k}\`: ${v}`)
+                .join("\n")
+            : "_Tidak ada gap signifikan._",
+        );
+        p("");
+        p("## Validasi silang (gap dari separuh pertama, diuji di separuh kedua)");
+        p("");
+        p(`Gap separuh pertama: ${JSON.stringify(gapsTrain)}`);
+        p("");
+        p(
+          `Separuh kedua: paper ${testBefore.paperMean}% · replay tanpa koreksi ${testBefore.replayMean}% · gap per alasan ${testAfter.replayMean}% · potongan rata ${flatTrain.toFixed(1)} poin → ${testFlat.replayMean}% (n ${testAfter.n})`,
+        );
+        p("");
+        p(
+          `Per kelompok sumber (separuh kedua): error tertimbang tanpa koreksi ${gErrNone.toFixed(2)} → dengan potongan per sumber ${gErrSrc.toFixed(2)} · potongan dari separuh pertama: ${JSON.stringify(srcTrain)} · rata-rata total ${testSrc.replayMean}%`,
+        );
+        p("");
+        p(
+          `Error |replay − paper| di separuh kedua: tanpa koreksi ${errNone.toFixed(2)} · gap per alasan ${errGap.toFixed(2)} · potongan rata ${errFlat.toFixed(2)} → **metode terpilih: ${method}${method === "flat" ? ` (${flatAll} poin/trade)` : ""}**`,
+        );
+        p("");
+        p("## Sesudah kalibrasi (semua trade)");
+        p("");
+        p(
+          `Rata-rata PnL/trade: paper ${sa.paperMean}% vs replay terkalibrasi **${sa.replayMean}%** → selisih ${sa.gap} poin`,
+        );
+        p("");
+        p(`Potongan per sumber (semua data): ${JSON.stringify(srcAll)}`);
+        p("");
+        p("| Kelompok sumber | n | paper | replay sebelum | replay sesudah |");
+        p("|---|---|---|---|---|");
+        for (const g of [...new Set(before.map((x) => sourceGroupOf(x.profile)))]) {
+          const b = summarizeGap(before.filter((x) => sourceGroupOf(x.profile) === g));
+          const a = summarizeGap(after.filter((x) => sourceGroupOf(x.profile) === g));
+          p(`| ${g} | ${b.n} | ${b.paperMean}% | ${b.replayMean}% | ${a.replayMean}% |`);
+        }
+        p("");
+        p("## 10 trade dengan selisih terbesar");
+        p("");
+        p("| id | profile | mint | paper | alasan paper | replay | alasan replay |");
+        p("|---|---|---|---|---|---|---|");
+        for (const t of [...before]
+          .filter((x) => x.replayPnlPct !== null)
+          .sort((a, b) => b.replayPnlPct! - b.paperPnlPct - (a.replayPnlPct! - a.paperPnlPct))
+          .slice(0, 10))
+          p(
+            `| ${t.id} | ${t.profile} | \`${t.mint.slice(0, 6)}…\` | ${t.paperPnlPct.toFixed(1)}% | ${t.paperReason} | ${t.replayPnlPct!.toFixed(1)}% | ${t.replayReason} |`,
+          );
+        const text = md.join("\n");
+        if (outPath) await Bun.write(outPath, `${text}\n`);
+        console.log(text);
+        if (save && sb.n < 60) {
+          // sampel kecil → potongan tidak stabil; kalibrasi lama tetap dipakai
+          console.log(`\nkalibrasi TIDAK disimpan: baru ${sb.n} trade bisa di-replay (minimal 60)`);
+        } else if (save) {
+          await db`INSERT INTO replay_calibration (n_trades, params, summary, note)
+                   VALUES (${sb.n}, ${{ method, exitGapPct: method === "gap" ? gaps : {}, flatHaircutPct: method === "flat" ? flatAll : 0, sourceHaircutPct: method === "source" ? srcAll : {}, capProfitAtTp: true, entrySlipPct: medSlip }}, ${{ before: sb, after: sa, crossVal: { train: gapsTrain, test: testAfter } }}, ${`calibrate ${hours} jam`})`;
+          console.log("\nkalibrasi disimpan → dipakai backtest/analyze berikutnya");
+        }
         return 0;
       } finally {
         await db.close();

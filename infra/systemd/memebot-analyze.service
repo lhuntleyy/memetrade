@@ -12,6 +12,8 @@ Environment=NODE_ENV=production
 Environment=BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
 Environment=MEMEBOT_CONFIG_DIR=/var/lib/memebot/config
 ExecStartPre=/usr/bin/mkdir -p /var/lib/memebot/reports
+# kalibrasi ulang replay vs paper (72 jam terakhir) sebelum analisa; gagal tidak menghentikan analisa
+ExecStartPre=-/bin/sh -c '/opt/memebot/.bun/bin/bun run apps/cli/src/main.ts calibrate 72 --save /var/lib/memebot/reports/kalibrasi-$(date -u +%%Y-%%m-%%d-%%H%%M).md'
 ExecStart=/bin/sh -c 'f=/var/lib/memebot/reports/analisa-$(date -u +%%Y-%%m-%%d-%%H%%M).md; /opt/memebot/.bun/bin/bun run apps/cli/src/main.ts analyze 24 "$f" && ln -sf "$f" /var/lib/memebot/reports/terbaru.md'
 TimeoutStartSec=900
 NoNewPrivileges=true

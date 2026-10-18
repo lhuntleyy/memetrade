@@ -88,6 +88,7 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - [x] P4-02 Sweep TP × SL + walk-forward anchored (CLI `replay` & tab Backtest)
 - [x] P4-03 Dashboard Backtest + tab Config (editor YAML, validasi + diff, versi, rollback, guard mode live)
 - [!] P4-04 LLM worker + narrative tagger — butuh ANTHROPIC_API_KEY
+- [x] P4-07 Kalibrasi replay vs paper per trade (`research/calibration.ts`, CLI `calibrate`, tabel `replay_calibration`) → dipakai analyze, replay CLI, tab Backtest; kalibrasi ulang harian
 - [ ] P4-05 Daily review + proposal config → replay → approve
 - [ ] P4-06 Dashboard: AI Insights
 
@@ -242,3 +243,10 @@ Legenda: `[ ]` belum · `[~]` sedang · `[x]` selesai · `[!]` butuh keputusan u
 - **Perbaikan:** query skor ditulis ulang (agregasi satu lintasan + filter `min_tokens` di SQL + `SET LOCAL statement_timeout 30s`) → 220 ms; papan wallet dashboard: tag diambil setelah LIMIT → 73 ms; `statement_timeout` per role (memebot 120 dtk, memebot_ro 60 dtk); drop-in Postgres `Restart=on-failure` + `OOMScoreAdjust=-500` (`infra/systemd/postgresql@17-main.service.d/memebot.conf`).
 - **Analisa 36 jam** (`docs/analysis/2026-10-18-analisa-36jam.md`, biaya terukur dari 1.045 probe: <$10k 3,7%, $10–30k 3,2%, $30–100k 2,6%, ≥$100k 1,2%): **tidak ada edge di token likuid** dari sumber mana pun — semua sumber OOS −2,9%/trade (225), migrasi −0,6% (79, median +0,8%, paling dekat impas), DexScreener −6% (36), smart money −3,7% (94).
 - **Paper trading nyata 36 jam:** smart_money 92 trade −0,072 SOL (rata-rata −0,8%, win 26%); explore_migration 37 trade −0,209 SOL (rata-rata **−10,8%**, jauh lebih buruk dari replay −0,6%) → replay masih terlalu optimis dibanding eksekusi berbasis quote; perlu kalibrasi replay terhadap fill paper.
+
+### 2026-10-19 — kalibrasi backtest vs paper trading
+- **Perbandingan per trade** (150 posisi paper tutup sejak exit berbasis quote, di-replay di waktu order beli yang sama, biaya terukur per likuiditas; `docs/analysis/2026-10-18-kalibrasi.md`): paper −5,18%/trade vs replay mentah +1,46% (selisih 6,6 poin).
+- **Penyebab:** (1) slippage entry kecil (median +0,7%) — bukan masalah; (2) **hard SL**: paper rata-rata −37,9% vs replay −14,9% — rug/dump terjadi di antara tick DexScreener, beberapa trade migrasi −70…−96% di paper sementara replay malah untung; (3) **TP/trailing**: lompatan tick melewati TP dihitung penuh di replay; (4) selisih beda per sumber: migrasi replay +0,8% vs paper −9,0%, smart money replay −3,7% vs paper −0,7% (replay pesimis).
+- **Kalibrasi:** profit dibatasi di level TP + potongan per sumber (migrasi 7,3, DexScreener 1,9, token baru 5,7, wallet 0 poin/trade). Validasi silang separuh kedua: error tertimbang per sumber 3,96 → 3,22. Setelah kalibrasi: paper −5,18% vs replay −4,87%.
+- **Analisa ulang 48 jam terkalibrasi** (`docs/analysis/2026-10-18-analisa-terkalibrasi.md`): token likuid ≥ $30k OOS — semua sumber −6,5% (278), migrasi −10,4% (114), DexScreener −7,2% (32), smart money −4,1% (94). **Tetap tidak ada edge**; dengan replay realistis, migrasi justru yang paling buruk.
+

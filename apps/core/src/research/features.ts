@@ -41,7 +41,8 @@ export async function loadDataset(
     replay: ReplayOptions;
     horizonSec: number;
     /** model biaya per baris (mis. dari cost probe per likuiditas); default = opts.replay */
-    costFor?: (features: Record<string, FeatureValue>) => { entryCostPct: number; exitCostPct: number };
+    /** opsi replay per baris (biaya terukur per likuiditas + kalibrasi per sumber) */
+    costFor?: (features: Record<string, FeatureValue>, source: string) => Partial<ReplayOptions>;
   },
 ): Promise<DatasetRow[]> {
   const rows = (await db`
@@ -77,7 +78,7 @@ export async function loadDataset(
     const ts = new Date(r.ts).getTime();
     const trade = simulate({ mint: r.mint, profile: r.source, ts }, ticks.get(r.mint) ?? [], opts.exit, {
       ...opts.replay,
-      ...(opts.costFor ? opts.costFor(r.features ?? {}) : {}),
+      ...(opts.costFor ? opts.costFor(r.features ?? {}, r.source) : {}),
     });
     const features: Record<string, FeatureValue> = {};
     for (const [k, v] of Object.entries(r.features ?? {})) if (!SKIP.has(k)) features[k] = v;

@@ -108,3 +108,9 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 
 ### ADR-026 · 2026-10-19 · accepted — Pengaman memori database
 - Semua query analitik berat wajib satu lintasan (tanpa sub-query berkorelasi per baris di atas data besar) dan punya batas waktu. Role DB punya `statement_timeout`; Postgres diprioritaskan bertahan saat OOM dan auto-restart.
+
+### ADR-027 · 2026-10-19 · accepted — Replay dikalibrasi ke paper trading
+- Replay di atas tick DexScreener terbukti terlalu optimis: rug/dump antar-tick tidak terlihat (hard SL paper rata-rata −38% vs replay −15%), lompatan tick di atas TP dihitung penuh, dan exit berbasis quote Jupiter lebih buruk dari harga tick. Selisihnya beda per sumber (migrasi ±10 poin, smart money malah pesimis ±3 poin).
+- Keputusan: semua backtest/analyze memakai kalibrasi terbaru dari `replay_calibration`: (1) profit dibatasi di level TP, (2) potongan rata per kelompok sumber = max(0, replay − paper) × n/(n+20). Metode (potongan rata / gap per alasan exit / per sumber) dipilih lewat validasi silang separuh-waktu. Sumber yang replay-nya sudah pesimis tidak dinaikkan.
+- `calibrate 72 --save` jalan otomatis sebelum analisa harian; tidak disimpan kalau < 60 trade bisa di-replay. Dashboard Backtest default terkalibrasi (bisa dimatikan untuk melihat replay mentah).
+

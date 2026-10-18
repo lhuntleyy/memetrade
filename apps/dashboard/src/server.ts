@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { createDb } from "@memebot/db";
 import { createLogger, loadConfig } from "@memebot/shared";
+import { calibrationOptions, latestCalibration } from "../../core/src/research/calibration.ts";
 import { loadReplayData, runReplay, sweepTpSl, walkForward } from "../../core/src/research/replay.ts";
 import { createAuth, LOGIN_PAGE } from "./auth.ts";
 import {
@@ -227,7 +228,10 @@ const server = Bun.serve({
       };
       const tps = list("tps", [15, 20, 25, 30, 40, 50]);
       const sls = list("sls", [10, 15, 20, 30]);
+      // default: dikalibrasi ke paper trading (batas profit di TP + potongan per sumber), calibrated=0 = replay mentah
+      const cal = u.searchParams.get("calibrated") === "0" ? null : await latestCalibration(db);
       const opts = {
+        ...calibrationOptions(cal, profile),
         latencySec: clampInt(u.searchParams.get("latency"), 1, 0, 30),
         entryCostPct: Math.min(20, Math.max(0, Number(u.searchParams.get("entry_cost") ?? 1.5) || 0)),
         exitCostPct: Math.min(20, Math.max(0, Number(u.searchParams.get("exit_cost") ?? 1.5) || 0)),
@@ -258,6 +262,7 @@ const server = Bun.serve({
         profile,
         exitRef: prof.exits.ref,
         options: opts,
+        calibration: cal ? { method: cal.method ?? null } : null,
         candidates: data.candidates.length,
         current: current.metrics,
         trades: current.trades.slice(0, 200),
