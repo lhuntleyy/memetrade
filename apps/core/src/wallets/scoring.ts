@@ -56,33 +56,49 @@ export function scoreWallet(a: WalletAggregate, minTokens: number): WalletScore 
 }
 
 /** Agregasi per wallet dari DB (lookback hari). */
-export async function loadWalletAggregates(db: Db, lookbackDays: number): Promise<WalletAggregate[]> {
-  const rows = (await db`
-    WITH per_token AS (
-      SELECT o.wallet, o.mint,
-             max(o.profit_usd) AS profit_usd,
-             bool_or(o.maker_tags && ARRAY['creator', 'dev_team']) AS dev,
-             array_agg(DISTINCT t) FILTER (WHERE t IS NOT NULL) AS tags
-      FROM wallet_observations o
-      LEFT JOIN LATERAL unnest(o.tags) t ON true
-      WHERE o.ts > now() - make_interval(days => ${lookbackDays})
-      GROUP BY o.wallet, o.mint
-    ), outcome AS (
-      SELECT DISTINCT ON (mint) mint, max_ret, rugged
-      FROM tracked_paths WHERE completed_at IS NOT NULL AND max_ret IS NOT NULL
-      ORDER BY mint, t0
-    )
-    SELECT p.wallet,
-           count(*)::int AS tokens,
-           count(*) FILTER (WHERE p.profit_usd > 0)::int AS profitable,
-           COALESCE(sum(p.profit_usd), 0)::float AS total_profit,
-           count(o.mint)::int AS with_outcome,
-           count(*) FILTER (WHERE o.max_ret >= 50)::int AS pumped,
-           count(*) FILTER (WHERE o.rugged)::int AS rugged,
-           bool_or(p.dev) AS is_dev,
-           (SELECT array_agg(DISTINCT x) FROM per_token p2, unnest(p2.tags) x WHERE p2.wallet = p.wallet) AS tags
-    FROM per_token p LEFT JOIN outcome o ON o.mint = p.mint
-    GROUP BY p.wallet`) as {
+export async function loadWalletAggregates(
+  db: Db,
+  lookbackDays: number,
+  minTokens = 1,
+): Promise<WalletAggregate[]> {
+  // Satu lintasan per CTE (tanpa sub-query per wallet). Versi lama memakai sub-query berkorelasi per wallet di
+  // atas CTE → O(n²) memori; dengan ±19 ribu wallet query itu memakan ±1 GB dan membuat Postgres kena OOM (2026-10-18).
+  const rows = (await db.begin(async (tx) => {
+    await tx`SET LOCAL statement_timeout = '30s'`;
+    return tx`
+      WITH obs AS (
+        SELECT wallet, mint, profit_usd, maker_tags, tags FROM wallet_observations
+        WHERE ts > now() - make_interval(days => ${lookbackDays})
+      ), per_token AS (
+        SELECT wallet, mint, max(profit_usd) AS profit_usd,
+               bool_or(maker_tags && ARRAY['creator', 'dev_team']) AS dev
+        FROM obs GROUP BY wallet, mint
+      ), eligible AS (
+        SELECT wallet FROM per_token GROUP BY wallet HAVING count(*) >= ${minTokens} OR bool_or(dev)
+      ), wallet_tags AS (
+        SELECT o.wallet, array_agg(DISTINCT t) AS tags
+        FROM obs o JOIN eligible e USING (wallet), unnest(o.tags) t
+        GROUP BY o.wallet
+      ), outcome AS (
+        SELECT DISTINCT ON (mint) mint, max_ret, rugged
+        FROM tracked_paths WHERE completed_at IS NOT NULL AND max_ret IS NOT NULL
+        ORDER BY mint, t0
+      )
+      SELECT p.wallet,
+             count(*)::int AS tokens,
+             count(*) FILTER (WHERE p.profit_usd > 0)::int AS profitable,
+             COALESCE(sum(p.profit_usd), 0)::float AS total_profit,
+             count(o.mint)::int AS with_outcome,
+             count(*) FILTER (WHERE o.max_ret >= 50)::int AS pumped,
+             count(*) FILTER (WHERE o.rugged)::int AS rugged,
+             bool_or(p.dev) AS is_dev,
+             wt.tags
+      FROM per_token p
+      JOIN eligible e USING (wallet)
+      LEFT JOIN outcome o ON o.mint = p.mint
+      LEFT JOIN wallet_tags wt ON wt.wallet = p.wallet
+      GROUP BY p.wallet, wt.tags`;
+  })) as {
     wallet: string;
     tokens: number;
     profitable: number;
@@ -116,7 +132,7 @@ export async function refreshWalletScores(
   cfg: SourcesConfig["wallet_tracker"]["scoring"],
   log: Logger,
 ): Promise<{ scored: number; active: number }> {
-  const aggs = await loadWalletAggregates(db, cfg.lookback_days);
+  const aggs = await loadWalletAggregates(db, cfg.lookback_days, cfg.min_tokens);
   const scores = aggs.map((a) => scoreWallet(a, cfg.min_tokens));
   const good = scores
     .filter((s) => s.score !== null && s.score >= cfg.min_score)

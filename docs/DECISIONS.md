@@ -105,3 +105,6 @@ Format: ID · tanggal · status (proposed / accepted / superseded) · keputusan 
 ### ADR-025 · 2026-10-17 · accepted — Fokus token likuid, ukur biaya asli
 - Hasil analisa: edge migrasi/DexScreener hanya muncul di biaya round-trip rendah; token baru negatif di semua kondisi → `explore_new_token` dimatikan, profile lain wajib likuiditas tinggi & tolak serial deployer.
 - Biaya eksekusi tidak lagi diasumsikan: cost probe mengukur quote beli→jual Jupiter per likuiditas; backtest/analisa memakai angka terukur.
+
+### ADR-026 · 2026-10-19 · accepted — Pengaman memori database
+- Semua query analitik berat wajib satu lintasan (tanpa sub-query berkorelasi per baris di atas data besar) dan punya batas waktu. Role DB punya `statement_timeout`; Postgres diprioritaskan bertahan saat OOM dan auto-restart.

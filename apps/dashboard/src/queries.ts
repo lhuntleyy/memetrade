@@ -190,6 +190,7 @@ export function equityCurve(db: Db, mode: string) {
 
 /** Papan wallet: wallet yang paling sering muncul sebagai top holder / pembeli besar. */
 export function walletLeaderboard(db: Db, hours: number, minTier: number, kind: string, limit: number) {
+  // tag & data watchlist diambil SETELAH LIMIT (bukan sub-query per wallet untuk semua ±19 ribu wallet)
   return db`
     WITH o AS (
       SELECT * FROM wallet_observations
@@ -197,28 +198,32 @@ export function walletLeaderboard(db: Db, hours: number, minTier: number, kind: 
         AND (${kind} = 'all' OR kind = ${kind})
         AND (kind <> 'big_buyer' OR COALESCE(buy_tier_usd, 0) >= ${minTier})
     ), per_token AS (
-      -- satu baris per (wallet, token): hindari dobel hitung kalau wallet top holder sekaligus pembeli besar
       SELECT wallet, mint,
              bool_or(kind = 'top_holder') AS top, bool_or(kind = 'big_buyer') AS big,
              max(buy_volume_usd) AS buy_usd, max(profit_usd) AS profit_usd, max(ts) AS ts,
              bool_or(maker_tags && ARRAY['creator', 'dev_team']) AS dev
       FROM o GROUP BY wallet, mint
+    ), board AS (
+      SELECT p.wallet,
+             count(*)::int AS tokens,
+             count(*) FILTER (WHERE p.top)::int AS as_top_holder,
+             count(*) FILTER (WHERE p.big)::int AS as_big_buyer,
+             round(COALESCE(sum(p.buy_usd), 0)::numeric, 0) AS buy_usd,
+             round(COALESCE(sum(p.profit_usd), 0)::numeric, 0) AS profit_usd,
+             max(p.ts) AS last_seen,
+             bool_or(p.dev) AS is_dev
+      FROM per_token p GROUP BY p.wallet
+    ), top AS (
+      SELECT b.*, ww.score_value AS score, ww.score AS score_parts,
+             COALESCE(ww.active, false) AS watched, COALESCE(ww.auto, false) AS auto
+      FROM board b LEFT JOIN watch_wallets ww ON ww.address = b.wallet
+      ORDER BY ww.score_value DESC NULLS LAST, b.tokens DESC, b.buy_usd DESC
+      LIMIT ${limit}
     )
-    SELECT p.wallet,
-           count(*)::int AS tokens,
-           count(*) FILTER (WHERE p.top)::int AS as_top_holder,
-           count(*) FILTER (WHERE p.big)::int AS as_big_buyer,
-           round(COALESCE(sum(p.buy_usd), 0)::numeric, 0) AS buy_usd,
-           round(COALESCE(sum(p.profit_usd), 0)::numeric, 0) AS profit_usd,
-           max(p.ts) AS last_seen,
-           bool_or(p.dev) AS is_dev,
-           (SELECT array_agg(DISTINCT t) FROM wallet_observations w2, unnest(w2.tags) t WHERE w2.wallet = p.wallet) AS tags,
-           COALESCE((SELECT active FROM watch_wallets ww WHERE ww.address = p.wallet), false) AS watched,
-           (SELECT score_value FROM watch_wallets ww WHERE ww.address = p.wallet) AS score,
-           (SELECT score FROM watch_wallets ww WHERE ww.address = p.wallet) AS score_parts,
-           COALESCE((SELECT auto FROM watch_wallets ww WHERE ww.address = p.wallet), false) AS auto
-    FROM per_token p GROUP BY p.wallet
-    ORDER BY score DESC NULLS LAST, tokens DESC, buy_usd DESC LIMIT ${limit}`;
+    SELECT top.*,
+           (SELECT array_agg(DISTINCT t) FROM wallet_observations w2, unnest(w2.tags) t WHERE w2.wallet = top.wallet) AS tags
+    FROM top
+    ORDER BY score DESC NULLS LAST, tokens DESC, buy_usd DESC`;
 }
 
 export function walletDetail(db: Db, address: string) {
